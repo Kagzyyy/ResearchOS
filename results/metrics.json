@@ -210,6 +210,47 @@
       "seed": 42,
       "model": "models/reranker-hard/final",
       "backend": "torch"
+    },
+    "finetuned_onnx_int8": {
+      "label": "Fine-tuned, ONNX INT8",
+      "metrics": {
+        "ndcg@1": 0.62667,
+        "ndcg@5": 0.72146,
+        "ndcg@10": 0.75037,
+        "ndcg@50": 0.76464,
+        "ndcg@100": 0.76464,
+        "map@1": 0.6025,
+        "map@5": 0.69021,
+        "map@10": 0.70382,
+        "map@50": 0.70777,
+        "map@100": 0.70777,
+        "recall@1": 0.6025,
+        "recall@5": 0.801,
+        "recall@10": 0.88456,
+        "recall@50": 0.942,
+        "recall@100": 0.942,
+        "p@1": 0.62667,
+        "p@5": 0.17733,
+        "p@10": 0.09933,
+        "p@50": 0.02127,
+        "p@100": 0.01063
+      },
+      "latency": {
+        "p50_ms": 12951.92,
+        "p95_ms": 13567.02,
+        "mean_ms": 12936.78,
+        "n_queries": 300
+      },
+      "rerank_only_latency": {
+        "p50_ms": 12917.82,
+        "p95_ms": 13532.94,
+        "mean_ms": 12899.86,
+        "n_queries": 300
+      },
+      "params": "278M",
+      "seed": 42,
+      "model": "models/onnx/reranker.int8.onnx",
+      "backend": "onnx"
     }
   }
 }

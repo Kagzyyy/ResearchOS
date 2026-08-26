@@ -9,7 +9,7 @@ trained twice on datasets that differ **only** in how their negatives were chose
 
 ## What the experiment found
 
-Two findings, and the second one is a null result:
+Three findings, and the second one is a null result:
 
 **1. Fine-tuning the reranker works, and matters a lot.** Off the shelf,
 `bge-reranker-base` scores **0.7124** nDCG@10 on SciFact — *worse* than the BM25 +
@@ -27,6 +27,12 @@ That is reported as a null result rather than buried, because a 0.25% difference
 presented as a win would be dishonest. `scripts/significance.py` reproduces it, and
 [Why hard negatives did not help here](#why-hard-negatives-did-not-help-here) discusses
 what would need to change to give the hypothesis a fair test.
+
+**3. INT8 quantization costs 1.3% of nDCG@10 and removes the GPU requirement.** The
+quantized model scores **0.7504** — still well above both the off-the-shelf reranker and
+the retrieval baseline — in a 279 MB artifact. It is 22× slower than the GPU, so it is a
+deployment option rather than a speed-up; see
+[The quantization tradeoff](#the-quantization-tradeoff).
 
 ---
 
@@ -91,7 +97,7 @@ it by `scripts/render_readme.py`.
 | + off-the-shelf reranker | 0.7124 | 0.9420 | 250 ms | 278M |
 | + fine-tuned, random negatives | 0.7583 | 0.9420 | 235 ms | 278M |
 | + fine-tuned, hard negatives | 0.7602 | 0.9420 | 215 ms | 278M |
-| Fine-tuned, ONNX INT8 | — | — | — | — |
+| Fine-tuned, ONNX INT8 | 0.7504 | 0.9420 | 13567 ms | 278M |
 
 **Fine-tuning works.** The fine-tuned reranker scores nDCG@10 0.7602 against 0.7124 off the shelf (+0.0478), and the off-the-shelf model is itself *below* the retrieval baseline it is meant to improve.
 
@@ -258,6 +264,24 @@ actually feels.
 Quantization is also lossy, so row 6 **re-evaluates quality** rather than reporting speed
 alone. Reporting a latency number without the accuracy column beside it would be
 dishonest — the whole question is whether the speedup costs more than it is worth.
+
+The measured cost, on the full test split:
+
+| | nDCG@10 | vs. fp16 GPU |
+|---|---|---|
+| Fine-tuned, PyTorch fp16 (row 5) | 0.7602 | — |
+| Fine-tuned, ONNX INT8 (row 6) | **0.7504** | **−0.0099 (−1.30%)** |
+| Off-the-shelf, PyTorch fp16 (row 3) | 0.7124 | −0.0478 |
+
+**1.3% is a real cost, and it is worth paying if you need CPU serving.** The decisive
+comparison is the third row: even after quantization, the fine-tuned model beats the
+*unquantized* off-the-shelf reranker by +0.038, and beats the BM25+dense baseline by
++0.027. So the ordering that matters survives quantization — you lose about a fifth of
+what fine-tuning bought you, and keep the rest, in a 279 MB artifact that needs no GPU.
+
+The p95 in the results table for row 6 (13.6 s) is end-to-end on CPU including
+retrieval, and is the honest number for that deployment. It is also why the GPU path is
+the default in `configs/app.yaml`.
 
 ### Prompt injection
 
