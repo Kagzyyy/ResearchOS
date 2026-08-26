@@ -16,10 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import device, load_config, report_vram, seed_everything
 from src.data.loader import load_split
+from src.config import Config
+from src.protocols import RerankerLike
 from src.rerank.evaluate import evaluate_run, latency_stats, summarise, write_row
 
 
-def load_reranker(cfg):
+def load_reranker(cfg: Config) -> RerankerLike:
     """Build a torch or onnx reranker depending on the config backend."""
     rc = cfg["reranker"]
     backend = rc.get("backend", "torch")

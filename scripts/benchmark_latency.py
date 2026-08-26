@@ -18,12 +18,17 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import device, load_config, seed_everything
-from src.data.loader import load_split, passage_text
+from src.data.loader import Corpus, load_split, passage_text
+from src.protocols import Scorer
 from src.rerank.evaluate import latency_stats
 
 
 def build_pair_batches(
-    queries: dict[str, str], fused: dict[str, dict[str, float]], corpus, qids: list[str], top_k: int
+    queries: dict[str, str],
+    fused: dict[str, dict[str, float]],
+    corpus: Corpus,
+    qids: list[str],
+    top_k: int,
 ) -> list[list[tuple[str, str]]]:
     """One list of (query, passage) pairs per query, identical across backends."""
     batches: list[list[tuple[str, str]]] = []
@@ -33,7 +38,9 @@ def build_pair_batches(
     return batches
 
 
-def time_backend(scorer, batches: list[list[tuple[str, str]]], warmup: int) -> dict[str, Any]:
+def time_backend(
+    scorer: Scorer, batches: list[list[tuple[str, str]]], warmup: int
+) -> dict[str, Any]:
     """Warm up, then time each query's rerank call."""
     for batch in batches[:warmup]:
         scorer.score(batch)

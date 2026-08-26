@@ -9,6 +9,7 @@ place where queries and clicks are logged.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import gradio as gr
@@ -76,7 +77,7 @@ def build_demo(api_url: str) -> gr.Blocks:
                 updates.append(gr.update(value=""))
         return updates
 
-    def make_click_handler(index: int):
+    def make_click_handler(index: int) -> Callable[[int | None, list[str]], str]:
         def handler(query_id: int | None, doc_ids: list[str]) -> str:
             if query_id is None or not doc_ids or index >= len(doc_ids):
                 return "Ask something first."

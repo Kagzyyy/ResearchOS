@@ -22,10 +22,13 @@ from src.data.loader import flatten_corpus, load_split
 from src.rerank.evaluate import evaluate_run, latency_stats, summarise, write_row
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.dense import DenseRetriever
+from src.protocols import SearchRetriever
 from src.retrieval.fusion import Run, reciprocal_rank_fusion
 
 
-def timed_search(retriever, queries: dict[str, str], top_k: int) -> tuple[Run, list[float]]:
+def timed_search(
+    retriever: SearchRetriever, queries: dict[str, str], top_k: int
+) -> tuple[Run, list[float]]:
     """Search one query at a time so the timings reflect the serving path."""
     run: Run = {}
     timings_ms: list[float] = []
