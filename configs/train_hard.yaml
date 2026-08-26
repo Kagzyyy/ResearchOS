@@ -1,0 +1,32 @@
+# Stage 5: treatment arm of the ablation - hard negatives. Row 5.
+#
+# This file and train_random.yaml must differ ONLY in train.negatives_file,
+# train.output_dir and run.name. Same seed, same hyperparameters, same epochs.
+# If anything else differs the ablation proves nothing.
+seed: 42
+
+model:
+  base: BAAI/bge-reranker-base
+  params: 110M
+  max_length: 384
+
+train:
+  negatives_file: data/hard_negatives.jsonl
+  output_dir: models/reranker-hard
+  num_negatives: 7
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  learning_rate: 2.0e-5
+  epochs: 3
+  warmup_ratio: 0.1
+  lr_scheduler: cosine
+  fp16: true
+  logging_steps: 20
+  save_total_limit: 3
+  use_lora: false
+  oom_fallback_lora: true
+  lora_rank: 16
+
+run:
+  name: reranker-hard-negatives
+  wandb_project: researchos-reranker

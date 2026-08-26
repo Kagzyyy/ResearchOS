@@ -1,0 +1,29 @@
+# Stage 6 eval: rerank with the INT8-quantized ONNX model on CPU. Row 6.
+seed: 42
+row_id: finetuned_onnx_int8
+
+dataset:
+  name: scifact
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  split: test
+  download_dir: datasets
+
+reranker:
+  model: models/onnx/reranker.int8.onnx
+  params: 110M
+  max_length: 384
+  batch_size: 32
+  fp16: false
+  backend: onnx
+  tokenizer: models/onnx
+
+rerank:
+  top_k: 50
+
+eval:
+  k_values: [1, 5, 10, 50, 100]
+
+paths:
+  cache_dir: cache
+  results: results/metrics.json
+  fused_run: cache/run_rrf_test.json

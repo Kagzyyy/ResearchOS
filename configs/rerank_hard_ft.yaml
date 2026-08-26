@@ -1,0 +1,28 @@
+# Stage 5 eval: rerank with the model fine-tuned on HARD negatives. Row 5.
+seed: 42
+row_id: finetuned_hard_negatives
+
+dataset:
+  name: scifact
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  split: test
+  download_dir: datasets
+
+reranker:
+  model: models/reranker-hard/final
+  params: 110M
+  max_length: 384
+  batch_size: 32
+  fp16: true
+  backend: torch
+
+rerank:
+  top_k: 50
+
+eval:
+  k_values: [1, 5, 10, 50, 100]
+
+paths:
+  cache_dir: cache
+  results: results/metrics.json
+  fused_run: cache/run_rrf_test.json

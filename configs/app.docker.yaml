@@ -1,0 +1,48 @@
+# Stage 7: serving config for the FastAPI app and the Gradio UI.
+seed: 42
+
+dataset:
+  name: scifact
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  split: test
+  download_dir: datasets
+
+retrieval:
+  top_k: 50
+  bm25:
+    k1: 1.5
+    b: 0.75
+    stemmer: english
+  dense:
+    model: BAAI/bge-small-en-v1.5
+    batch_size: 64
+    max_length: 512
+    query_prefix: "Represent this sentence for searching relevant passages: "
+  fusion:
+    rrf_k: 60
+
+# Serving uses the row-5 model (fine-tuned on hard negatives).
+# Set backend to onnx and point model at models/onnx/reranker.int8.onnx to
+# serve the quantized row-6 model on CPU instead.
+reranker:
+  backend: onnx
+  model: models/onnx/reranker.int8.onnx
+  tokenizer: models/onnx
+  params: 110M
+  max_length: 384
+  batch_size: 32
+  fp16: false
+
+generation:
+  model: claude-sonnet-4-6
+  max_tokens: 1024
+  top_k_passages: 5
+
+server:
+  host: 0.0.0.0
+  api_port: 8000
+  ui_port: 7860
+
+paths:
+  cache_dir: cache
+  feedback_db: results/feedback.db

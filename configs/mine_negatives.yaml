@@ -1,0 +1,32 @@
+# Stage 3: mine training data from the SciFact train split.
+seed: 42
+
+dataset:
+  name: scifact
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  split: train
+  download_dir: datasets
+
+retrieval:
+  top_k: 50
+  bm25:
+    k1: 1.5
+    b: 0.75
+    stemmer: english
+  dense:
+    model: BAAI/bge-small-en-v1.5
+    batch_size: 64
+    max_length: 512
+    query_prefix: "Represent this sentence for searching relevant passages: "
+  fusion:
+    rrf_k: 60
+
+mining:
+  num_negatives: 7
+  hard_min_rank: 10        # sample hard negatives from ranks 10..top_k
+
+paths:
+  cache_dir: cache
+  train_run: cache/run_rrf_train.json
+  hard_negatives: data/hard_negatives.jsonl
+  random_negatives: data/random_negatives.jsonl

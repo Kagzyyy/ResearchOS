@@ -1,0 +1,26 @@
+# Stage 6: export the row-5 model, quantize it, and benchmark all three backends.
+seed: 42
+
+dataset:
+  name: scifact
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  split: test
+  download_dir: datasets
+
+export:
+  source_model: models/reranker-hard/final
+  fp32_path: models/onnx/reranker.onnx
+  int8_path: models/onnx/reranker.int8.onnx
+  tokenizer_dir: models/onnx
+  max_length: 384
+  opset: 17
+
+benchmark:
+  batch_size: 32
+  warmup_queries: 5
+  num_queries: 50          # queries sampled from the test split for timing
+  candidates_per_query: 50
+
+paths:
+  fused_run: cache/run_rrf_test.json
+  latency: results/latency.json

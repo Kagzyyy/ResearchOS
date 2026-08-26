@@ -1,0 +1,29 @@
+# Virtual environment — thousands of files, rebuildable from pyproject/requirements
+.venv/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Downloaded datasets (BEIR/SciFact) — rebuildable, and large
+datasets/
+
+# Model weights, checkpoints, exported models — hundreds of MB each
+models/
+checkpoints/
+*.bin
+*.safetensors
+*.onnx
+
+# Cached indices and embeddings — rebuildable, slow but not source
+cache/
+indices/
+
+# Secrets — ANTHROPIC_API_KEY lives here, never in git
+.env
+
+# Weights & Biases local run logs
+wandb/
+
+# SQLite citation-click log
+*.db

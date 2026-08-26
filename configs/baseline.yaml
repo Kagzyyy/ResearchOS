@@ -1,0 +1,31 @@
+# Stage 1: baseline retrieval. Produces rows 1 and 2 of the results table.
+seed: 42
+
+dataset:
+  name: scifact
+  url: https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip
+  split: test
+  download_dir: datasets
+
+retrieval:
+  top_k: 50
+  bm25:
+    k1: 1.5
+    b: 0.75
+    stemmer: english
+  dense:
+    model: BAAI/bge-small-en-v1.5
+    params: 33M
+    batch_size: 64
+    max_length: 512
+    query_prefix: "Represent this sentence for searching relevant passages: "
+  fusion:
+    rrf_k: 60
+
+eval:
+  k_values: [1, 5, 10, 50, 100]
+
+paths:
+  cache_dir: cache
+  results: results/metrics.json
+  fused_run: cache/run_rrf_test.json

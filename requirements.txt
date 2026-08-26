@@ -1,0 +1,39 @@
+# ResearchOS - pinned direct dependencies.
+#
+# torch must come from the CUDA index, not PyPI, or you get a CPU-only build:
+#   uv pip install torch==2.6.0 --torch-backend=cu124
+# then:
+#   uv pip install -r requirements.txt
+
+# --- core ML ---
+torch==2.6.0
+transformers==5.15.1
+sentence-transformers==6.0.0
+accelerate==1.14.0
+peft==0.20.0
+datasets==5.0.1
+numpy==2.4.6
+
+# --- retrieval ---
+beir==2.2.0
+pytrec-eval-terrier==0.5.10
+bm25s==0.3.11
+PyStemmer==3.1.0
+faiss-cpu==1.15.0
+
+# --- inference optimization ---
+onnx==1.22.0
+onnxruntime==1.29.0
+
+# --- serving ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+gradio==6.26.0
+httpx==0.28.1
+pydantic==2.13.4
+
+# --- generation, config, tracking ---
+anthropic==1.0.0
+PyYAML==6.0.3
+python-dotenv==1.2.3
+wandb==0.28.2
