@@ -196,6 +196,21 @@ python scripts/render_readme.py
 
 Every script takes a config file. No hyperparameter is hardcoded.
 
+### Verifying the ablation
+
+The headline claim is a delta between two training runs, which is worth nothing unless
+those runs were identical apart from the intervention. That is checked mechanically
+rather than taken on trust:
+
+```bash
+python scripts/verify_ablation.py
+```
+
+It asserts that the two configs differ only in the three permitted fields, that the two
+datasets carry the same positives in the same order with the same group sizes, that the
+negative sets barely overlap, and that both runs took the same number of optimizer steps
+under the same learning-rate schedule. It exits non-zero if any check fails.
+
 ### Setup
 
 ```bash
