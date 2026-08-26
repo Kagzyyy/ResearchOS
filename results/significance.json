@@ -1,0 +1,25 @@
+{
+  "seed": 42,
+  "n_queries": 300,
+  "resamples": 10000,
+  "control": {
+    "model": "models/reranker-random/final",
+    "mean_ndcg@10": 0.75835
+  },
+  "treatment": {
+    "model": "models/reranker-hard/final",
+    "mean_ndcg@10": 0.76025
+  },
+  "mean_difference": 0.0019,
+  "bootstrap_95_ci": [
+    -0.01336,
+    0.01721
+  ],
+  "permutation_p_value": 0.8062,
+  "per_query": {
+    "treatment_better": 40,
+    "control_better": 35,
+    "tied": 225
+  },
+  "significant_at_0.05": false
+}

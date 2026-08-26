@@ -29,6 +29,7 @@ from sentence_transformers.cross_encoder import (
 )
 from sentence_transformers.cross_encoder.losses import MultipleNegativesRankingLoss
 
+from src.config import report_vram
 from src.data.negatives import read_jsonl
 
 
@@ -80,12 +81,17 @@ def _apply_lora(model: CrossEncoder, rank: int) -> CrossEncoder:
     return model
 
 
-def _free_cuda() -> None:
-    """Release everything before an OOM retry, or the retry inherits the problem."""
+def _free_cuda(reset_peak: bool = False) -> None:
+    """Release everything before an OOM retry, or the retry inherits the problem.
+
+    `reset_peak` is opt-in: resetting the counter on teardown would wipe the
+    measurement before it can be reported, which is the whole point of tracking it.
+    """
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
+        if reset_peak:
+            torch.cuda.reset_peak_memory_stats()
 
 
 def _training_args(
@@ -130,7 +136,7 @@ def train_reranker(cfg: dict[str, Any], seed: int) -> str:
     dataset = build_dataset(tc["negatives_file"], tc["num_negatives"])
 
     def run(use_lora: bool, gradient_checkpointing: bool) -> str:
-        _free_cuda()
+        _free_cuda(reset_peak=True)
         model = CrossEncoder(mc["base"], num_labels=1, max_length=mc["max_length"])
         if use_lora:
             model = _apply_lora(model, tc.get("lora_rank", 16))
@@ -143,6 +149,8 @@ def train_reranker(cfg: dict[str, Any], seed: int) -> str:
         )
         try:
             trainer.train()
+            # Read the peak BEFORE teardown; the counter must survive to be reported.
+            report_vram(f"{cfg['run']['name']} (training)")
             final_dir = str(Path(output_dir) / "final")
             model.save_pretrained(final_dir)
             print(f"[train] saved -> {final_dir}")

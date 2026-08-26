@@ -1,0 +1,39 @@
+{
+  "seed": 42,
+  "num_queries": 50,
+  "candidates_per_query": 50,
+  "backends": {
+    "pytorch": {
+      "device": "cuda",
+      "precision": "fp16",
+      "p50_ms": 173.61,
+      "p95_ms": 176.73,
+      "mean_ms": 172.79,
+      "n_queries": 50,
+      "throughput_pairs_per_s": 289.4,
+      "throughput_queries_per_s": 5.79
+    },
+    "onnx_fp32": {
+      "device": "cpu",
+      "precision": "fp32",
+      "file_size_mb": 1112.4,
+      "p50_ms": 7789.61,
+      "p95_ms": 7855.98,
+      "mean_ms": 7792.35,
+      "n_queries": 50,
+      "throughput_pairs_per_s": 6.4,
+      "throughput_queries_per_s": 0.13
+    },
+    "onnx_int8": {
+      "device": "cpu",
+      "precision": "int8",
+      "file_size_mb": 278.8,
+      "p50_ms": 3879.29,
+      "p95_ms": 6990.11,
+      "mean_ms": 4833.84,
+      "n_queries": 50,
+      "throughput_pairs_per_s": 10.3,
+      "throughput_queries_per_s": 0.21
+    }
+  }
+}

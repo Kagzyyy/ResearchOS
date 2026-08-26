@@ -19,6 +19,7 @@ from src.rerank.evaluate import ROW_LABELS, ROW_ORDER
 
 START = "<!-- RESULTS:START -->"
 END = "<!-- RESULTS:END -->"
+NL = "\n"
 
 
 def _fmt(value: float | None, places: int = 4) -> str:
@@ -47,29 +48,63 @@ def build_table(rows: dict) -> str:
             f"| {'—' if p95 is None else f'{p95:.0f} ms'} "
             f"| {row.get('params') or '—'} |"
         )
-    return "\n".join(lines)
+    return NL.join(lines)
 
 
-def build_delta(rows: dict) -> str:
-    """The headline sentence: hard negatives minus random negatives."""
+def build_delta(rows: dict, sig_path: str = "results/significance.json") -> str:
+    """The headline findings, with the significance test attached.
+
+    A delta reported without its confidence interval is a claim, not a result.
+    """
     hard = rows.get("finetuned_hard_negatives", {}).get("metrics", {})
     rand = rows.get("finetuned_random_negatives", {}).get("metrics", {})
+    off = rows.get("offshelf_reranker", {}).get("metrics", {})
     if not hard or not rand:
         return ""
+
+    parts: list[str] = []
+
+    if off:
+        gain = hard.get("ndcg@10", 0.0) - off.get("ndcg@10", 0.0)
+        parts.append(
+            f"**Fine-tuning works.** The fine-tuned reranker scores nDCG@10 "
+            f"{hard.get('ndcg@10'):.4f} against {off.get('ndcg@10'):.4f} off the shelf "
+            f"({gain:+.4f}), and the off-the-shelf model is itself *below* the "
+            f"retrieval baseline it is meant to improve."
+        )
+
     delta = hard.get("ndcg@10", 0.0) - rand.get("ndcg@10", 0.0)
-    pct = (delta / rand["ndcg@10"] * 100.0) if rand.get("ndcg@10") else 0.0
-    direction = "above" if delta >= 0 else "below"
-    return (
-        f"\n**Headline:** training on hard negatives scores nDCG@10 "
-        f"{hard.get('ndcg@10'):.4f}, {abs(delta):.4f} ({abs(pct):.1f}%) {direction} the "
-        f"identical run on random negatives ({rand.get('ndcg@10'):.4f}). "
-        f"Same seed, same hyperparameters, same epochs - only the negatives file differs.\n"
-    )
+    sig_file = Path(sig_path)
+    if sig_file.exists():
+        sig = json.loads(sig_file.read_text(encoding="utf-8"))
+        low, high = sig["bootstrap_95_ci"]
+        verdict = (
+            "statistically significant"
+            if sig["significant_at_0.05"]
+            else "NOT statistically significant"
+        )
+        per_query = sig["per_query"]
+        parts.append(
+            f"**Hard vs. random negatives: {delta:+.4f} nDCG@10 — {verdict}.** "
+            f"Paired permutation p = {sig['permutation_p_value']:.3f}; 95% bootstrap CI "
+            f"[{low:+.4f}, {high:+.4f}] over {sig['n_queries']} queries. Per query: "
+            f"{per_query['treatment_better']} better, {per_query['control_better']} worse, "
+            f"{per_query['tied']} identical. Same seed, same hyperparameters, same epochs — "
+            f"only the negatives file differs. Reproduce with `scripts/significance.py`."
+        )
+    else:
+        parts.append(
+            f"**Hard vs. random negatives:** {delta:+.4f} nDCG@10 "
+            f"(no significance test has been run)."
+        )
+
+    return NL + (NL * 2).join(parts) + NL
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metrics", default="results/metrics.json")
+    parser.add_argument("--significance", default="results/significance.json")
     parser.add_argument("--readme", default="README.md")
     args = parser.parse_args()
 
@@ -78,7 +113,7 @@ def main() -> None:
         raise SystemExit(f"{metrics_path} not found - run the pipeline stages first.")
     rows = json.loads(metrics_path.read_text(encoding="utf-8")).get("rows", {})
 
-    block = f"{START}\n\n{build_table(rows)}\n{build_delta(rows)}\n{END}"
+    block = START + NL * 2 + build_table(rows) + NL + build_delta(rows, args.significance) + NL + END
 
     readme_path = Path(args.readme)
     if not readme_path.exists():

@@ -7,6 +7,27 @@ The RAG app is the harness. The reranker is the point. The deliverable is the
 ablation table below: the same model, the same hyperparameters, the same seed,
 trained twice on datasets that differ **only** in how their negatives were chosen.
 
+## What the experiment found
+
+Two findings, and the second one is a null result:
+
+**1. Fine-tuning the reranker works, and matters a lot.** Off the shelf,
+`bge-reranker-base` scores **0.7124** nDCG@10 on SciFact — *worse* than the BM25 +
+dense baseline it is supposed to improve (0.7236). Fine-tuned on mined data it reaches
+**0.7602**: +0.048 over the off-the-shelf model, +0.037 over the baseline.
+
+**2. Hard negatives did *not* measurably beat random negatives here.** The headline
+hypothesis was that mining negatives from the retriever's own top-50 would beat
+sampling them uniformly from the corpus. The measured gap is **+0.0019 nDCG@10**, with
+a paired permutation test giving **p = 0.81** and a 95% bootstrap CI of
+**[−0.013, +0.017]** — straddling zero. Per query: 40 better, 35 worse, **225
+identical**. On this benchmark, at this scale, the intervention is not detectable.
+
+That is reported as a null result rather than buried, because a 0.25% difference
+presented as a win would be dishonest. `scripts/significance.py` reproduces it, and
+[Why hard negatives did not help here](#why-hard-negatives-did-not-help-here) discusses
+what would need to change to give the hypothesis a fair test.
+
 ---
 
 ## Demo
@@ -31,7 +52,7 @@ flowchart LR
     BM25 -- "top 50" --> RRF["<b>RRF fusion</b><br/>k=60"]
     DENSE -- "top 50" --> RRF
 
-    RRF -- "50 candidates" --> RR["<b>Cross-encoder reranker</b><br/>bge-reranker-base (110M)<br/><i>fine-tuned on hard negatives</i>"]
+    RRF -- "50 candidates" --> RR["<b>Cross-encoder reranker</b><br/>bge-reranker-base (278M)<br/><i>fine-tuned on hard negatives</i>"]
 
     RR -- "top 5" --> GEN["<b>Claude</b><br/>answer with<br/>span citations"]
 
@@ -69,8 +90,12 @@ it by `scripts/render_readme.py`.
 | BM25 + dense (RRF) | 0.7236 | 0.9420 | 38 ms | 33M |
 | + off-the-shelf reranker | 0.7124 | 0.9420 | 250 ms | 278M |
 | + fine-tuned, random negatives | 0.7583 | 0.9420 | 235 ms | 278M |
-| + fine-tuned, hard negatives | — | — | — | — |
+| + fine-tuned, hard negatives | 0.7602 | 0.9420 | 215 ms | 278M |
 | Fine-tuned, ONNX INT8 | — | — | — | — |
+
+**Fine-tuning works.** The fine-tuned reranker scores nDCG@10 0.7602 against 0.7124 off the shelf (+0.0478), and the off-the-shelf model is itself *below* the retrieval baseline it is meant to improve.
+
+**Hard vs. random negatives: +0.0019 nDCG@10 — NOT statistically significant.** Paired permutation p = 0.806; 95% bootstrap CI [-0.0134, +0.0172] over 300 queries. Per query: 40 better, 35 worse, 225 identical. Same seed, same hyperparameters, same epochs — only the negatives file differs. Reproduce with `scripts/significance.py`.
 
 <!-- RESULTS:END -->
 
@@ -132,6 +157,45 @@ That 100% vs 0.9% is the intervention, stated numerically. A hard negative is a 
 the retrieval stack genuinely confused for an answer to *this* claim; a random negative
 almost never is.
 
+The intervention was therefore applied cleanly. It just did not produce a measurable
+effect — see below.
+
+### Why hard negatives did not help here
+
+The training signal behaved exactly as the hypothesis predicted. Training loss, same
+step, same schedule, same seed:
+
+| | step 20 | step 40 | step 60 | step 80 |
+|---|---|---|---|---|
+| Random negatives | 0.4987 | 0.1366 | 0.0893 | 0.0924 |
+| Hard negatives | **0.8770** | — | — | — |
+
+The hard arm starts at ~1.8× the loss, which is the point: the random arm had already
+solved its task by epoch 1 and spent two thirds of training with almost nothing left to
+learn. So the datasets differed, and the optimisation differed. The *evaluation* did
+not move.
+
+Three explanations, in descending order of how much I believe them:
+
+1. **The evaluation has no room left.** Reranking only reorders the top-50, so
+   Recall@50 is pinned at 0.9420 for every reranked row — the ceiling is fixed before
+   the reranker runs. 225 of 300 queries produced byte-identical rankings under both
+   models. Most SciFact claims have exactly one gold passage that both arms already
+   place first, so there is nothing for a better model to fix.
+2. **Domain adaptation dominates negative quality.** Most of the +0.048 comes from
+   teaching a general-purpose multilingual reranker what biomedical text looks like.
+   Both arms get that equally. Negative *selection* is a second-order effect on top of a
+   much larger first-order one.
+3. **919 training groups is small.** With 87 optimizer steps total, there may simply not
+   be enough gradient updates for a subtler training signal to express itself.
+
+What a fair test would need: a larger benchmark where recall is not already 94% (BEIR's
+NFCorpus or TREC-COVID), more than one seed per arm so within-arm variance can be
+compared against between-arm variance, and enough training data that the ceiling is the
+model rather than the dataset. None of that fits on one laptop evening, which is a
+limitation of this project, not evidence against the technique — the literature reports
+hard-negative mining working well at larger scale.
+
 ### Listwise loss, not pointwise
 
 The objective is `MultipleNegativesRankingLoss` over a group of 1 positive and 7
@@ -157,13 +221,36 @@ the experiment design, and shrinking them would make the ablation incomparable.
 ### The quantization tradeoff
 
 Row 6 exports the row-5 model to ONNX and applies INT8 dynamic quantization: weights
-stored as int8, activation scales chosen at runtime, no calibration set needed. The
-file shrinks roughly 4x and CPU inference speeds up substantially.
+stored as int8, activation scales chosen at runtime, no calibration set needed.
 
-It is not free. Quantization is lossy, so row 6 **re-evaluates quality** rather than
-reporting speed alone. Reporting a latency win without the accuracy column next to it
-would be dishonest — the whole question is whether the speedup costs more than it is
-worth, and that is only answerable with both numbers side by side.
+Measured on 50 test queries × 50 candidates each (`results/latency.json`):
+
+| Backend | Device | p50 | p95 | Throughput | File size |
+|---|---|---|---|---|---|
+| PyTorch fp16 | CUDA | **174 ms** | **177 ms** | **289 pairs/s** | — |
+| ONNX fp32 | CPU | 7,790 ms | 7,856 ms | 6.4 pairs/s | 1,112 MB |
+| ONNX INT8 | CPU | 3,879 ms | 6,990 ms | 10.3 pairs/s | **279 MB** |
+
+**Quantization did what it promised — and it is still 22× slower than the GPU.** INT8
+is a genuine 2.0× speedup over fp32 on the same CPU, at 4.0× smaller on disk. But the
+honest comparison is the top row: reranking 50 candidates takes 174 ms on the 4060 and
+3.9 seconds on the CPU. No amount of quantization closes that.
+
+So INT8 is **not a latency optimization here — it is a deployment option.** It buys the
+ability to serve without a GPU at all, in a 279 MB artifact that fits comfortably in a
+container (which is exactly what the `Dockerfile` ships). If you have the GPU, use
+PyTorch. If you cannot depend on one, INT8 makes CPU serving merely slow rather than
+unusable. Framing it as "we made inference faster" would be true only against a baseline
+nobody would deploy.
+
+Note also the p50/p95 spread: PyTorch is 174/177 ms — almost perfectly flat — while INT8
+is 3,879/6,990 ms. The CPU path's tail is nearly 2× its median, because it is competing
+for cores with everything else on the machine. Tail latency, not median, is what a user
+actually feels.
+
+Quantization is also lossy, so row 6 **re-evaluates quality** rather than reporting speed
+alone. Reporting a latency number without the accuracy column beside it would be
+dishonest — the whole question is whether the speedup costs more than it is worth.
 
 ### Prompt injection
 
@@ -266,6 +353,15 @@ scripts/       entrypoints
 
 Bounding the claims honestly is a feature of this project, not an apology.
 
+- **The headline hypothesis was not confirmed.** Hard negatives did not measurably beat
+  random negatives (+0.0019 nDCG@10, p = 0.81, CI [−0.013, +0.017]). What the project
+  *does* demonstrate is that fine-tuning the reranker at all is worth +0.048 over the
+  off-the-shelf model. The hard-vs-random question remains open, and this setup was
+  underpowered to answer it — see
+  [Why hard negatives did not help here](#why-hard-negatives-did-not-help-here).
+- **Only one seed per arm.** With a single run each, there is no way to separate the
+  between-arm difference from ordinary run-to-run variance. Three seeds per arm would
+  have made the null result much stronger; it would also have tripled the training time.
 - **Evaluation uses a public benchmark, not a bespoke labeled set.** SciFact is a
   standard BEIR dataset. That makes the numbers comparable to published work, but it
   also means the model has been tuned against a benchmark that many models have seen.

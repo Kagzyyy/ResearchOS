@@ -169,6 +169,47 @@
       "seed": 42,
       "model": "models/reranker-random/final",
       "backend": "torch"
+    },
+    "finetuned_hard_negatives": {
+      "label": "+ fine-tuned, hard negatives",
+      "metrics": {
+        "ndcg@1": 0.64333,
+        "ndcg@5": 0.73306,
+        "ndcg@10": 0.76025,
+        "ndcg@50": 0.77366,
+        "ndcg@100": 0.77366,
+        "map@1": 0.61917,
+        "map@5": 0.70194,
+        "map@10": 0.71521,
+        "map@50": 0.71895,
+        "map@100": 0.71895,
+        "recall@1": 0.61917,
+        "recall@5": 0.81139,
+        "recall@10": 0.88789,
+        "recall@50": 0.942,
+        "recall@100": 0.942,
+        "p@1": 0.64333,
+        "p@5": 0.18,
+        "p@10": 0.09967,
+        "p@50": 0.02127,
+        "p@100": 0.01063
+      },
+      "latency": {
+        "p50_ms": 208.21,
+        "p95_ms": 214.99,
+        "mean_ms": 2418.52,
+        "n_queries": 300
+      },
+      "rerank_only_latency": {
+        "p50_ms": 173.65,
+        "p95_ms": 180.18,
+        "mean_ms": 2381.6,
+        "n_queries": 300
+      },
+      "params": "278M",
+      "seed": 42,
+      "model": "models/reranker-hard/final",
+      "backend": "torch"
     }
   }
 }
