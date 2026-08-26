@@ -41,8 +41,14 @@ deployment option rather than a speed-up; see
 <!-- Record a 60s capture of the Gradio UI and drop it here as docs/demo.gif -->
 ![60-second demo](docs/demo.gif)
 
-> **Not yet recorded.** Start the app (below), run one of the example claims, expand a
-> passage, and click "Mark as useful" — that is the full loop the GIF should show.
+> **Not yet recorded** — the only deliverable in this repo that is still outstanding.
+>
+> The loop it should capture is verified working end to end: submit
+> *"Vitamin D supplementation reduces the risk of respiratory tract infection."*,
+> get five reranked passages in **2.3 s** (all five vitamin-D papers, top hit scoring
+> 0.60), expand one, click **Mark as useful**, and watch the click land in
+> `results/feedback.db` with its query id and doc id. Start the app as described under
+> [Running the app](#running-the-app) and record that.
 
 ---
 
