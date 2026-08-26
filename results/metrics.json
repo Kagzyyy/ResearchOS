@@ -128,6 +128,47 @@
       "seed": 42,
       "model": "BAAI/bge-reranker-base",
       "backend": "torch"
+    },
+    "finetuned_random_negatives": {
+      "label": "+ fine-tuned, random negatives",
+      "metrics": {
+        "ndcg@1": 0.64,
+        "ndcg@5": 0.73242,
+        "ndcg@10": 0.75835,
+        "ndcg@50": 0.77422,
+        "ndcg@100": 0.77422,
+        "map@1": 0.61317,
+        "map@5": 0.70311,
+        "map@10": 0.71566,
+        "map@50": 0.72006,
+        "map@100": 0.72006,
+        "recall@1": 0.61317,
+        "recall@5": 0.8035,
+        "recall@10": 0.87689,
+        "recall@50": 0.942,
+        "recall@100": 0.942,
+        "p@1": 0.64,
+        "p@5": 0.178,
+        "p@10": 0.09867,
+        "p@50": 0.02127,
+        "p@100": 0.01063
+      },
+      "latency": {
+        "p50_ms": 214.46,
+        "p95_ms": 234.88,
+        "mean_ms": 219.68,
+        "n_queries": 300
+      },
+      "rerank_only_latency": {
+        "p50_ms": 179.67,
+        "p95_ms": 200.28,
+        "mean_ms": 182.76,
+        "n_queries": 300
+      },
+      "params": "110M",
+      "seed": 42,
+      "model": "models/reranker-random/final",
+      "backend": "torch"
     }
   }
 }

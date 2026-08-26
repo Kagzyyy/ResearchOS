@@ -62,6 +62,16 @@ evaluator. `results/metrics.json` is the source of truth; this table is rendered
 it by `scripts/render_readme.py`.
 
 <!-- RESULTS:START -->
+
+| Setup | nDCG@10 | Recall@50 | p95 latency | Params |
+|---|---|---|---|---|
+| BM25 only | 0.6863 | 0.8852 | 1 ms | — |
+| BM25 + dense (RRF) | 0.7236 | 0.9420 | 38 ms | 33M |
+| + off-the-shelf reranker | 0.7124 | 0.9420 | 250 ms | 110M |
+| + fine-tuned, random negatives | — | — | — | — |
+| + fine-tuned, hard negatives | — | — | — | — |
+| Fine-tuned, ONNX INT8 | — | — | — | — |
+
 <!-- RESULTS:END -->
 
 Latency is end-to-end per query (retrieval + fusion + reranking), measured
@@ -98,6 +108,20 @@ The control arm draws its negatives uniformly from the corpus. Both datasets hav
 same size, the same positives, in the same order, with the same number of negatives per
 group. `configs/train_random.yaml` and `configs/train_hard.yaml` differ only in the
 negatives file, the output directory, and the run name — verifiable with `diff`.
+
+How different the two datasets actually are, measured on the 919 mined groups:
+
+| | hard | random |
+|---|---|---|
+| Groups | 919 | 919 |
+| Negatives per group | 7 | 7 |
+| Positives | identical | identical |
+| Negatives that the retriever surfaced in the top-50 **for their own query** | 100.0% | 0.9% |
+| Negative instances shared between the two files | 6 / 6,433 | |
+
+That 100% vs 0.9% is the intervention, stated numerically. A hard negative is a passage
+the retrieval stack genuinely confused for an answer to *this* claim; a random negative
+almost never is.
 
 ### Listwise loss, not pointwise
 

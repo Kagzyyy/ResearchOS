@@ -18,7 +18,25 @@ from pathlib import Path
 
 import torch
 from sentence_transformers import CrossEncoder
+from torch import nn
 from transformers import AutoTokenizer
+
+
+class _LogitsOnly(nn.Module):
+    """Return a bare tensor instead of a SequenceClassifierOutput.
+
+    The ONNX tracer handles plain tensors reliably; HF ModelOutput dataclasses
+    are flattened inconsistently across transformers versions.
+    """
+
+    def __init__(self, model: nn.Module, input_names: list[str]) -> None:
+        super().__init__()
+        self.model = model
+        self.input_names = input_names
+
+    def forward(self, *args: torch.Tensor) -> torch.Tensor:
+        kwargs = dict(zip(self.input_names, args))
+        return self.model(**kwargs).logits
 
 
 def export_onnx(
@@ -49,9 +67,11 @@ def export_onnx(
     dynamic_axes = {name: {0: "batch", 1: "sequence"} for name in input_names}
     dynamic_axes["logits"] = {0: "batch"}
 
+    wrapped = _LogitsOnly(model, input_names).eval()
+
     with torch.no_grad():
         torch.onnx.export(
-            model,
+            wrapped,
             args,
             str(out),
             input_names=input_names,
