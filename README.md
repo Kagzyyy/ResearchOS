@@ -163,17 +163,24 @@ effect — see below.
 ### Why hard negatives did not help here
 
 The training signal behaved exactly as the hypothesis predicted. Training loss, same
-step, same schedule, same seed:
+steps, same schedule, same seed — only the negatives file differs:
 
 | | step 20 | step 40 | step 60 | step 80 |
 |---|---|---|---|---|
 | Random negatives | 0.4987 | 0.1366 | 0.0893 | 0.0924 |
-| Hard negatives | **0.8770** | — | — | — |
+| Hard negatives | 0.8770 | 0.5025 | 0.3966 | 0.3233 |
+| **Ratio** | 1.8× | 3.7× | **4.4×** | 3.5× |
 
-The hard arm starts at ~1.8× the loss, which is the point: the random arm had already
-solved its task by epoch 1 and spent two thirds of training with almost nothing left to
-learn. So the datasets differed, and the optimisation differed. The *evaluation* did
-not move.
+This is the clearest result in the project, and it is not the one that was being tested.
+The random arm **solves its task by step 40** and flatlines at ~0.09 — it spent the back
+half of training with essentially nothing left to learn. The hard arm is still at 0.32
+after three epochs and still descending: it never ran out of difficulty. The two arms
+were unmistakably doing different work.
+
+**And the evaluation did not move at all.** A 3.5× difference in training loss produced a
++0.0019 difference in nDCG@10 and left 225 of 300 queries byte-identical. That gap
+between "the optimisation clearly changed" and "the metric clearly did not" is the actual
+finding, and it points hard at explanation 1 below.
 
 Three explanations, in descending order of how much I believe them:
 
@@ -203,7 +210,7 @@ negatives — softmax cross-entropy across the group. Pointwise BCE would ask "i
 pair relevant, yes or no," which is not the question at inference time. Listwise asks
 "which of these eight is the right one," which is exactly the question.
 
-### Fitting 110M params into 8GB
+### Fitting 278M params into 8GB
 
 Full fine-tuning at batch size 8 OOMs immediately, because
 `MultipleNegativesRankingLoss` expands each batch item into 8 pairs — 64 sequences of
@@ -371,11 +378,14 @@ Bounding the claims honestly is a feature of this project, not an apology.
   passages that were shown. Turning that into a training signal — deduplication,
   position-bias correction, a periodic mining job — is specified and not built.
 - **Distillation to a ~30M student and Triton serving are planned, not done.** The
-  current serving path is a single-process FastAPI app with the 110M reranker. That is
+  current serving path is a single-process FastAPI app with the 278M reranker. That is
   adequate for a demo and would not survive real traffic.
-- **The SciFact test split is small.** 300 queries means differences of a point or two
-  in nDCG@10 sit near the noise floor. The ablation's direction is the claim; its exact
-  magnitude carries a wide error bar, and no significance test has been run.
+- **The SciFact test split is small, and it is the binding constraint.** 300 queries put
+  the 95% CI on a paired difference at roughly ±0.015 nDCG@10 — which is why a +0.0019
+  effect was never going to be resolvable here. Any future arm of this experiment needs
+  either a larger benchmark or many more seeds before its delta means anything.
 - **Generation is not evaluated.** Retrieval is the measured bottleneck and the only
   thing this project makes claims about. Answer quality, faithfulness, and citation
   correctness are unmeasured.
+- **The 60-second demo GIF has not been recorded.** Everything it would show works and
+  is exercised by the API and UI, but the capture itself is still to do.
