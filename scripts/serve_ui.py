@@ -29,12 +29,15 @@ def main() -> None:
     api_url = args.api or f"http://{host}:{cfg['server']['api_port']}"
 
     print(f"[ui] talking to API at {api_url}")
+
+    import gradio as gr
+
     demo = build_demo(api_url)
     demo.launch(
         server_name=host,
         server_port=args.port or cfg["server"]["ui_port"],
         share=args.share,
-        show_api=False,
+        theme=gr.themes.Soft(),
     )
 
 

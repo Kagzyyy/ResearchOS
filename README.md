@@ -67,8 +67,8 @@ it by `scripts/render_readme.py`.
 |---|---|---|---|---|
 | BM25 only | 0.6863 | 0.8852 | 1 ms | — |
 | BM25 + dense (RRF) | 0.7236 | 0.9420 | 38 ms | 33M |
-| + off-the-shelf reranker | 0.7124 | 0.9420 | 250 ms | 110M |
-| + fine-tuned, random negatives | — | — | — | — |
+| + off-the-shelf reranker | 0.7124 | 0.9420 | 250 ms | 278M |
+| + fine-tuned, random negatives | 0.7583 | 0.9420 | 235 ms | 278M |
 | + fine-tuned, hard negatives | — | — | — | — |
 | Fine-tuned, ONNX INT8 | — | — | — | — |
 
@@ -76,6 +76,15 @@ it by `scripts/render_readme.py`.
 
 Latency is end-to-end per query (retrieval + fusion + reranking), measured
 single-query on an RTX 4060 Laptop, 8GB.
+
+**On the parameter counts.** `bge-reranker-base` is commonly described as a 110M model,
+and the original spec for this project assumed that. It is not: the checkpoint holds
+**278.0M** parameters, because it is XLM-RoBERTa-based with a 250,002-token multilingual
+vocabulary. The word-embedding matrix alone is 192.0M; the transformer body and
+classification head are 86.0M. Verified by counting `model.parameters()`, and visible in
+the 1,112 MB fp32 ONNX export. The 8GB choice still holds — 278M fits, 568M
+(`bge-reranker-v2-m3`) would not — but the table reports the measured number rather than
+the folklore one. `bge-small-en-v1.5` is 33.4M, as advertised.
 
 ---
 

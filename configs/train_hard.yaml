@@ -7,7 +7,7 @@ seed: 42
 
 model:
   base: BAAI/bge-reranker-base
-  params: 110M
+  params: 278M
   max_length: 384
 
 train:

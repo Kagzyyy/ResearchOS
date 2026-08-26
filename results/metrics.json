@@ -124,7 +124,7 @@
         "mean_ms": 205.75,
         "n_queries": 300
       },
-      "params": "110M",
+      "params": "278M",
       "seed": 42,
       "model": "BAAI/bge-reranker-base",
       "backend": "torch"
@@ -165,7 +165,7 @@
         "mean_ms": 182.76,
         "n_queries": 300
       },
-      "params": "110M",
+      "params": "278M",
       "seed": 42,
       "model": "models/reranker-random/final",
       "backend": "torch"

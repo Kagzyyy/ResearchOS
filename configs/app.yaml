@@ -28,7 +28,7 @@ reranker:
   backend: torch
   model: models/reranker-hard/final
   tokenizer: models/onnx
-  params: 110M
+  params: 278M
   max_length: 384
   batch_size: 32
   fp16: true

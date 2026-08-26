@@ -91,7 +91,8 @@ def build_demo(api_url: str) -> gr.Blocks:
 
         return handler
 
-    with gr.Blocks(title="ResearchOS", theme=gr.themes.Soft()) as demo:
+    # Gradio 6 moved `theme` from the Blocks constructor to launch().
+    with gr.Blocks(title="ResearchOS") as demo:
         gr.Markdown(
             "# ResearchOS\n"
             "Scientific claim verification over SciFact. BM25 + dense retrieval, fused with "
