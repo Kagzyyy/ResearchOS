@@ -74,14 +74,18 @@ answer:
   min_mean_score: 0.35
   # Groq: free tier, OpenAI-compatible. Model ids change as Groq rotates its
   # catalogue - if you get a decommissioned-model error, change this line.
-  model: llama-3.3-70b-versatile
-  max_tokens: 1200
+  # gpt-oss models are REASONING models: hidden reasoning counts against
+  # max_tokens, so the budget must be generous or content comes back empty.
+  # Groq rotates its catalogue - llama-3.3-70b-versatile was decommissioned.
+  # List what you actually have: Groq().models.list()
+  model: openai/gpt-oss-120b
+  max_tokens: 2500
 
 # Citation lookup: paste a reference you saw in a paper, get it explained.
 citation:
   allow_remote: true        # fall back to the arXiv API when not in the corpus
   fetch_full_text: true     # download the PDF for on-demand papers
-  max_tokens: 1400
+  max_tokens: 3000
 
 server:
   host: 127.0.0.1

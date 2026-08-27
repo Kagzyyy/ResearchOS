@@ -23,7 +23,7 @@ import os
 import re
 from typing import Any
 
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 ANSWER_SYSTEM_PROMPT = """You explain AI and machine-learning research papers clearly, \
 to a reader who is technical but not a specialist in this subfield.
@@ -111,7 +111,18 @@ def _complete(system: str, user: str, model: str, max_tokens: int, temperature: 
         ],
         # No tools. Retrieved text must not reach any tool-calling path.
     )
-    return (response.choices[0].message.content or "").strip()
+    choice = response.choices[0]
+    text = (choice.message.content or "").strip()
+    if not text:
+        # gpt-oss models are reasoning models: their hidden reasoning counts
+        # against max_tokens. Too small a budget burns it all and returns empty
+        # content with finish_reason="length" - silently, unless caught here.
+        raise RuntimeError(
+            f"{model} returned no content (finish_reason={choice.finish_reason!r}). "
+            "These are reasoning models and reasoning consumes max_tokens - "
+            "raise answer.max_tokens in the config."
+        )
+    return text
 
 
 def generate_answer(

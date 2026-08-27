@@ -445,7 +445,7 @@ function Prose({ text }: { text: string }) {
         .map((line, i) => (
           <p key={i}>
             {line
-              .split(/(\*\*[^*]+\*\*|`[^`]+`|\[\d{4}\.\d{4,5}\])/g)
+              .split(/(\*\*[^*]+\*\*|`[^`]+`|\[\d{4}\.\d{4,5}[^\]]*\])/g)
               .map((part, j) => {
                 if (part.startsWith("**") && part.endsWith("**"))
                   return (
@@ -459,11 +459,11 @@ function Prose({ text }: { text: string }) {
                       {part.slice(1, -1)}
                     </code>
                   );
-                if (/^\[\d{4}\.\d{4,5}\]$/.test(part))
+                if (/^\[\d{4}\.\d{4,5}[^\]]*\]$/.test(part))
                   return (
                     <a
                       key={j}
-                      href={`https://arxiv.org/abs/${part.slice(1, -1)}`}
+                      href={`https://arxiv.org/abs/${part.slice(1, -1).split("†")[0]}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-sky-400 hover:underline"

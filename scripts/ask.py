@@ -18,6 +18,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Windows consoles default to cp1252. Model output routinely contains en dashes,
+# non-breaking hyphens and curly quotes, and printing those raises
+# UnicodeEncodeError mid-answer. Force UTF-8 and replace anything unmappable.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from src.api.ml_pipeline import MLPipeline
 from src.config import load_config, seed_everything
 
