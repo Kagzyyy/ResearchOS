@@ -55,6 +55,33 @@ export interface ExplainResult {
   timing_ms: { total: number; generation?: number };
 }
 
+export interface PaperHit {
+  paper_id: string;
+  doc_id: string;
+  title: string;
+  authors: string[];
+  abstract: string;
+  published: string;
+  primary_category: string;
+  arxiv_url: string;
+  score: number;
+  matched_passages: number;
+  matched_sections: string[];
+  why: string;
+  why_section: string;
+  has_full_text: boolean;
+}
+
+export interface PapersResult {
+  query_id: number;
+  topic: string;
+  papers: PaperHit[];
+  confident: boolean;
+  top_score: number;
+  mean_top_score: number;
+  timing_ms: { total: number };
+}
+
 export interface Health {
   status: string;
   chunks: number;
@@ -75,6 +102,9 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
+
+export const findPapers = (topic: string, topK = 10) =>
+  post<PapersResult>("/papers", { topic, top_k: topK });
 
 export const ask = (query: string, topK = 6) =>
   post<AskResult>("/ask", { query, top_k: topK, generate: true });

@@ -151,6 +151,77 @@ class MLPipeline:
         )
         return [self._passage(cid, s) for cid, s in selected]
 
+    # -------------------------------------------------------- paper discovery
+
+    def find_papers(self, topic: str, top_k: int = 10) -> dict[str, Any]:
+        """Topic in, ranked *papers* out.
+
+        The ask path returns passages, which is right for answering a question
+        and wrong for "show me work on X" - you get five paragraphs where you
+        wanted five papers. Here the per-paper cap is deliberately skipped, a
+        wide candidate set is reranked, and results are then grouped by paper.
+
+        A paper is scored by its single best passage. Summing would reward long
+        papers with many mediocre chunks over short papers with one excellent
+        one, which inverts what you actually want from a search result.
+        """
+        start = time.perf_counter()
+        query_map = {PSEUDO_QID: topic}
+
+        bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
+        dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
+        fused = reciprocal_rank_fusion([bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k)
+        reranked, _ = self.reranker.rerank(query_map, fused, self.corpus, top_k=self.retrieve_k)
+
+        grouped: dict[str, dict[str, Any]] = {}
+        for chunk_id, score in reranked[PSEUDO_QID].items():
+            entry = self.corpus[chunk_id]
+            pid = entry["paper_id"]
+            bucket = grouped.setdefault(
+                pid, {"score": float("-inf"), "matches": 0, "best_chunk": None, "sections": []}
+            )
+            bucket["matches"] += 1
+            bucket["sections"].append(entry["section"])
+            if score > bucket["score"]:
+                bucket["score"] = float(score)
+                bucket["best_chunk"] = chunk_id
+
+        ordered = sorted(grouped.items(), key=lambda kv: kv[1]["score"], reverse=True)[:top_k]
+
+        papers: list[dict[str, Any]] = []
+        for pid, info in ordered:
+            meta = self.papers_by_id.get(pid, {})
+            best = self.corpus[info["best_chunk"]]
+            papers.append(
+                {
+                    "paper_id": pid,
+                    "doc_id": info["best_chunk"],
+                    "title": meta.get("title") or best["title"],
+                    "authors": (meta.get("authors") or [])[:6],
+                    "abstract": meta.get("abstract", ""),
+                    "published": meta.get("published") or best["published"],
+                    "primary_category": meta.get("primary_category", ""),
+                    "arxiv_url": f"https://arxiv.org/abs/{pid}",
+                    "score": round(info["score"], 4),
+                    "matched_passages": info["matches"],
+                    "matched_sections": sorted(set(info["sections"]))[:5],
+                    "why": best["text"][:400],
+                    "why_section": best["section"],
+                    "has_full_text": bool(meta.get("full_text")),
+                }
+            )
+
+        scores = [p["score"] for p in papers]
+        best_score, mean_top, confident = self._confidence(scores)
+        return {
+            "topic": topic,
+            "papers": papers,
+            "confident": confident,
+            "top_score": round(best_score, 3),
+            "mean_top_score": round(mean_top, 3),
+            "timing_ms": {"total": round((time.perf_counter() - start) * 1000.0, 1)},
+        }
+
     # ------------------------------------------------------------------- ask
 
     def answer(self, question: str, generate: bool = True) -> dict[str, Any]:

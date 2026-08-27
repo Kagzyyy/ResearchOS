@@ -1,67 +1,86 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   BookOpen,
+  FileText,
+  Layers,
   Loader2,
-  MessageSquareText,
-  Quote,
   Search,
+  Sparkles,
   TriangleAlert,
 } from "lucide-react";
 import {
   ask,
   explain,
+  findPapers,
   health,
   logClick,
   type AskResult,
   type ExplainResult,
   type Health,
+  type PaperHit,
+  type PapersResult,
   type Passage,
 } from "@/lib/api";
 
-type Mode = "ask" | "explain";
+type Mode = "papers" | "explain";
 
 const EXAMPLES: Record<Mode, string[]> = {
-  ask: [
-    "How do joint-embedding predictive architectures avoid representation collapse?",
-    "What is the difference between JEPA and masked autoencoders?",
-    "How is reinforcement learning used to improve LLM reasoning?",
-    "What are world models used for in robotics?",
+  papers: [
+    "world models for robot manipulation",
+    "mixture-of-experts routing",
+    "reinforcement learning for LLM reasoning",
+    "diffusion models for video generation",
+    "self-supervised learning without contrastive pairs",
   ],
   explain: [
     "[23] M. Assran et al. Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture. CVPR 2023.",
-    "arXiv:2301.08243",
-    "Masked Autoencoders Are Scalable Vision Learners",
+    "arXiv:2312.00752",
+    "How do JEPAs avoid representation collapse?",
   ],
 };
 
 export function ResearchConsole() {
-  const [mode, setMode] = useState<Mode>("ask");
+  const [mode, setMode] = useState<Mode>("papers");
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [askResult, setAskResult] = useState<AskResult | null>(null);
+  const [papersResult, setPapersResult] = useState<PapersResult | null>(null);
   const [explainResult, setExplainResult] = useState<ExplainResult | null>(null);
+  const [askResult, setAskResult] = useState<AskResult | null>(null);
   const [status, setStatus] = useState<Health | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     health().then(setStatus).catch(() => setStatus(null));
   }, []);
+
+  function clear() {
+    setPapersResult(null);
+    setExplainResult(null);
+    setAskResult(null);
+    setError(null);
+  }
 
   async function run(value?: string) {
     const text = (value ?? input).trim();
     if (text.length < 3 || loading) return;
     setInput(text);
     setLoading(true);
-    setError(null);
-    setAskResult(null);
-    setExplainResult(null);
+    clear();
     try {
-      if (mode === "ask") setAskResult(await ask(text));
-      else setExplainResult(await explain(text));
+      if (mode === "papers") {
+        setPapersResult(await findPapers(text));
+      } else {
+        const res = await explain(text);
+        if (res.resolved) {
+          setExplainResult(res);
+        } else {
+          // Not a citation — treat it as a question about the corpus instead.
+          setAskResult(await ask(text));
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,7 +88,8 @@ export function ResearchConsole() {
     }
   }
 
-  const queryId = askResult?.query_id ?? explainResult?.query_id ?? null;
+  const queryId =
+    papersResult?.query_id ?? explainResult?.query_id ?? askResult?.query_id ?? null;
 
   return (
     <section id="console" className="mx-auto w-full max-w-5xl px-4 py-16 md:py-24">
@@ -80,47 +100,63 @@ export function ResearchConsole() {
             ? `${status.papers.toLocaleString()} papers · ${status.chunks.toLocaleString()} passages · reranked by ${status.reranker_model?.split("/").pop()}`
             : "Backend not reachable — start the API on port 8100."}
           {status && !status.generation_enabled && (
-            <span className="ml-2 text-amber-400">
-              · GROQ_API_KEY unset, passages only
-            </span>
+            <span className="ml-2 text-amber-400">· GROQ_API_KEY unset, no written answers</span>
           )}
         </p>
       </header>
 
-      <div className="mb-4 flex gap-2">
-        <ModeButton active={mode === "ask"} onClick={() => setMode("ask")} icon={<MessageSquareText size={15} />}>
-          Ask a question
+      <div className="mb-4 flex flex-wrap gap-2">
+        <ModeButton
+          active={mode === "papers"}
+          onClick={() => {
+            setMode("papers");
+            clear();
+          }}
+          icon={<Layers size={15} />}
+          hint="a topic → the papers on it"
+        >
+          Find papers
         </ModeButton>
-        <ModeButton active={mode === "explain"} onClick={() => setMode("explain")} icon={<Quote size={15} />}>
-          Explain a citation
+        <ModeButton
+          active={mode === "explain"}
+          onClick={() => {
+            setMode("explain");
+            clear();
+          }}
+          icon={<Sparkles size={15} />}
+          hint="a citation or a concept → explained"
+        >
+          Explain
         </ModeButton>
       </div>
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 backdrop-blur-sm focus-within:border-white/25">
         <textarea
-          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run();
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              run();
+            }
           }}
           rows={mode === "explain" ? 3 : 2}
           placeholder={
-            mode === "ask"
-              ? "Ask anything about AI research…"
-              : "Paste a reference: [23] Author et al. Title. Venue. — or an arXiv id"
+            mode === "papers"
+              ? "A topic, e.g. world models for robot manipulation…"
+              : "Paste a reference, an arXiv id, or ask about a concept…"
           }
           className="w-full resize-none bg-transparent px-2 py-1 text-[15px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
         <div className="flex items-center justify-between px-2 pt-2">
-          <span className="text-xs text-slate-500">⌘/Ctrl + Enter</span>
+          <span className="text-xs text-slate-500">Enter to run · Shift+Enter for newline</span>
           <button
             onClick={() => run()}
             disabled={loading || input.trim().length < 3}
             className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {loading ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-            {mode === "ask" ? "Ask" : "Explain"}
+            {mode === "papers" ? "Find papers" : "Explain"}
           </button>
         </div>
       </div>
@@ -132,23 +168,20 @@ export function ResearchConsole() {
             onClick={() => run(ex)}
             className="max-w-full truncate rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/25 hover:text-slate-200"
           >
-            {ex.length > 68 ? `${ex.slice(0, 68)}…` : ex}
+            {ex.length > 64 ? `${ex.slice(0, 64)}…` : ex}
           </button>
         ))}
       </div>
 
       {error && (
-        <div className="mt-6 flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
-          <TriangleAlert size={18} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-semibold">Request failed</p>
-            <p className="mt-1 text-red-300/80">{error}</p>
-          </div>
-        </div>
+        <Callout tone="red" title="Request failed">
+          {error}
+        </Callout>
       )}
 
-      {askResult && <AskView result={askResult} queryId={queryId} />}
+      {papersResult && <PapersView result={papersResult} queryId={queryId} />}
       {explainResult && <ExplainView result={explainResult} queryId={queryId} />}
+      {askResult && <AskView result={askResult} queryId={queryId} />}
     </section>
   );
 }
@@ -157,97 +190,176 @@ function ModeButton({
   active,
   onClick,
   icon,
+  hint,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
+  hint: string;
   children: React.ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
-        active
-          ? "bg-white/10 text-white ring-1 ring-white/20"
-          : "text-slate-400 hover:text-slate-200"
+      className={`group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
+        active ? "bg-white/10 text-white ring-1 ring-white/20" : "text-slate-400 hover:text-slate-200"
       }`}
     >
       {icon}
       {children}
+      <span className="hidden text-xs font-normal text-slate-500 sm:inline">· {hint}</span>
     </button>
   );
 }
 
-function AskView({ result, queryId }: { result: AskResult; queryId: number | null }) {
+function Callout({
+  tone,
+  title,
+  children,
+}: {
+  tone: "red" | "amber";
+  title: string;
+  children: React.ReactNode;
+}) {
+  const colours =
+    tone === "red"
+      ? "border-red-500/30 bg-red-500/10 text-red-100"
+      : "border-amber-500/30 bg-amber-500/10 text-amber-100";
   return (
-    <div className="mt-8 space-y-6">
-      {!result.confident && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-          <TriangleAlert size={18} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-semibold">Outside this corpus</p>
-            <p className="mt-1 text-amber-200/80">
-              Top passages averaged {result.mean_top_score.toFixed(3)}. The closest
-              matches are shown, but treat them as unrelated.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {result.answer && (
-        <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
-          <Prose text={result.answer} />
-        </article>
-      )}
-
-      <Meta
-        items={[
-          `${result.distinct_papers} papers`,
-          `${result.timing_ms.retrieval_and_rerank.toFixed(0)} ms retrieval`,
-          result.timing_ms.generation > 0
-            ? `${(result.timing_ms.generation / 1000).toFixed(1)} s generation`
-            : "no generation",
-          `mean ${result.mean_top_score.toFixed(3)}`,
-        ]}
-      />
-
-      <PassageList title="Sources" passages={result.citations} queryId={queryId} />
+    <div className={`mt-6 flex items-start gap-3 rounded-xl border p-4 text-sm ${colours}`}>
+      <TriangleAlert size={18} className="mt-0.5 shrink-0" />
+      <div>
+        <p className="font-semibold">{title}</p>
+        <p className="mt-1 opacity-80">{children}</p>
+      </div>
     </div>
   );
 }
 
-function ExplainView({ result, queryId }: { result: ExplainResult; queryId: number | null }) {
-  if (!result.resolved) {
-    return (
-      <div className="mt-8 space-y-4">
-        <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-          <TriangleAlert size={18} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-semibold">Could not resolve that citation</p>
-            <p className="mt-1 text-amber-200/80">
-              Searched for <span className="font-mono">{result.query_used}</span>. Try the
-              arXiv id, or just the title.
-            </p>
-          </div>
-        </div>
-        {result.candidates.length > 0 && (
-          <div className="rounded-xl border border-white/10 p-4">
-            <p className="mb-2 text-xs tracking-wide text-slate-400 uppercase">Did you mean</p>
-            <ul className="space-y-1.5 text-sm text-slate-300">
-              {result.candidates.map((c) => (
-                <li key={c.paper_id} className="flex gap-2">
-                  <span className="font-mono text-slate-500">{c.score}</span>
-                  <span>{c.title}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+function Meta({ items }: { items: string[] }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+      {items.map((i) => (
+        <span key={i}>{i}</span>
+      ))}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ papers */
+
+function PapersView({ result, queryId }: { result: PapersResult; queryId: number | null }) {
+  return (
+    <div className="mt-8 space-y-6">
+      {!result.confident && (
+        <Callout tone="amber" title="Outside this corpus">
+          Top matches averaged {result.mean_top_score.toFixed(3)}. Results are shown but
+          are probably unrelated to what you asked.
+        </Callout>
+      )}
+      <Meta
+        items={[
+          `${result.papers.length} papers`,
+          `${result.timing_ms.total.toFixed(0)} ms`,
+          `top ${result.top_score.toFixed(3)}`,
+        ]}
+      />
+      <div className="space-y-3">
+        {result.papers.map((p, i) => (
+          <PaperCard key={p.paper_id} paper={p} rank={i + 1} queryId={queryId} />
+        ))}
       </div>
-    );
+    </div>
+  );
+}
+
+function PaperCard({
+  paper,
+  rank,
+  queryId,
+}: {
+  paper: PaperHit;
+  rank: number;
+  queryId: number | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [logged, setLogged] = useState(false);
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && !logged && queryId !== null) {
+      logClick(queryId, paper.doc_id).catch(() => {});
+      setLogged(true);
+    }
   }
 
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/[0.02] transition hover:border-white/20">
+      <button onClick={toggle} className="flex w-full items-start gap-4 p-4 text-left">
+        <span className="mt-1 w-5 shrink-0 text-right font-mono text-xs text-slate-600">
+          {rank}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] leading-snug font-medium text-slate-100">
+            {paper.title}
+          </span>
+          <span className="mt-1 block text-xs text-slate-500">
+            {paper.authors.slice(0, 3).join(", ")}
+            {paper.authors.length > 3 && " et al."} · {paper.published} ·{" "}
+            {paper.primary_category}
+          </span>
+          <span className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono">
+              {paper.score.toFixed(3)}
+            </span>
+            <span>
+              {paper.matched_passages} passage{paper.matched_passages === 1 ? "" : "s"} matched
+            </span>
+            {paper.matched_sections.length > 0 && (
+              <span className="text-slate-600">{paper.matched_sections.join(" · ")}</span>
+            )}
+            {paper.has_full_text && (
+              <span className="inline-flex items-center gap-1 text-slate-600">
+                <FileText size={11} /> full text
+              </span>
+            )}
+          </span>
+        </span>
+      </button>
+
+      {open && (
+        <div className="space-y-3 border-t border-white/10 px-4 py-3 pl-13">
+          <div>
+            <p className="mb-1 text-[11px] tracking-wider text-slate-500 uppercase">
+              Why it matched · {paper.why_section}
+            </p>
+            <p className="text-sm leading-relaxed text-slate-300">{paper.why}…</p>
+          </div>
+          {paper.abstract && (
+            <div>
+              <p className="mb-1 text-[11px] tracking-wider text-slate-500 uppercase">Abstract</p>
+              <p className="text-sm leading-relaxed text-slate-400">{paper.abstract}</p>
+            </div>
+          )}
+          <a
+            href={paper.arxiv_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-sky-400 hover:underline"
+          >
+            {paper.paper_id} on arXiv <ArrowUpRight size={12} />
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------- explain */
+
+function ExplainView({ result, queryId }: { result: ExplainResult; queryId: number | null }) {
   const paper = result.paper!;
   return (
     <div className="mt-8 space-y-6">
@@ -275,7 +387,7 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
       <Meta
         items={[
           `resolved via ${result.method.replace("_", " ")}`,
-          result.from_corpus ? "from local corpus" : "fetched from arXiv",
+          result.from_corpus ? "from local corpus" : "fetched live from arXiv",
           paper.has_full_text ? "full text" : "abstract only",
           `${(result.timing_ms.total / 1000).toFixed(1)} s`,
         ]}
@@ -299,37 +411,70 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
   );
 }
 
-function Meta({ items }: { items: string[] }) {
+function AskView({ result, queryId }: { result: AskResult; queryId: number | null }) {
   return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-      {items.map((i) => (
-        <span key={i}>{i}</span>
-      ))}
+    <div className="mt-8 space-y-6">
+      <Callout tone="amber" title="Not a citation — answered as a question instead">
+        Nothing resolved to a specific paper, so this was answered from the corpus.
+      </Callout>
+      {result.answer && (
+        <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+          <Prose text={result.answer} />
+        </article>
+      )}
+      <Meta
+        items={[
+          `${result.distinct_papers} papers`,
+          `${result.timing_ms.total.toFixed(0)} ms`,
+          `mean ${result.mean_top_score.toFixed(3)}`,
+        ]}
+      />
+      <PassageList title="Sources" passages={result.citations} queryId={queryId} />
     </div>
   );
 }
 
-/** Minimal markdown: **bold**, `code`, and paragraph breaks. */
+/* -------------------------------------------------------------- primitives */
+
 function Prose({ text }: { text: string }) {
   return (
     <div className="space-y-3 text-[15px] leading-relaxed text-slate-200">
-      {text.split("\n").filter((l) => l.trim()).map((line, i) => (
-        <p key={i}>
-          {line.split(/(\*\*[^*]+\*\*|`[^`]+`|\[\d{4}\.\d{4,5}\])/g).map((part, j) => {
-            if (part.startsWith("**") && part.endsWith("**"))
-              return <strong key={j} className="font-semibold text-white">{part.slice(2, -2)}</strong>;
-            if (part.startsWith("`") && part.endsWith("`"))
-              return <code key={j} className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[13px]">{part.slice(1, -1)}</code>;
-            if (/^\[\d{4}\.\d{4,5}\]$/.test(part))
-              return (
-                <a key={j} href={`https://arxiv.org/abs/${part.slice(1, -1)}`} target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">
-                  {part}
-                </a>
-              );
-            return <span key={j}>{part}</span>;
-          })}
-        </p>
-      ))}
+      {text
+        .split("\n")
+        .filter((l) => l.trim())
+        .map((line, i) => (
+          <p key={i}>
+            {line
+              .split(/(\*\*[^*]+\*\*|`[^`]+`|\[\d{4}\.\d{4,5}\])/g)
+              .map((part, j) => {
+                if (part.startsWith("**") && part.endsWith("**"))
+                  return (
+                    <strong key={j} className="font-semibold text-white">
+                      {part.slice(2, -2)}
+                    </strong>
+                  );
+                if (part.startsWith("`") && part.endsWith("`"))
+                  return (
+                    <code key={j} className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[13px]">
+                      {part.slice(1, -1)}
+                    </code>
+                  );
+                if (/^\[\d{4}\.\d{4,5}\]$/.test(part))
+                  return (
+                    <a
+                      key={j}
+                      href={`https://arxiv.org/abs/${part.slice(1, -1)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sky-400 hover:underline"
+                    >
+                      {part}
+                    </a>
+                  );
+                return <span key={j}>{part}</span>;
+              })}
+          </p>
+        ))}
     </div>
   );
 }
@@ -365,7 +510,6 @@ function PassageCard({ passage, queryId }: { passage: Passage; queryId: number |
   function toggle() {
     const next = !open;
     setOpen(next);
-    // Opening a citation is the feedback signal the retraining loop would consume.
     if (next && !logged && queryId !== null) {
       logClick(queryId, passage.doc_id).catch(() => {});
       setLogged(true);

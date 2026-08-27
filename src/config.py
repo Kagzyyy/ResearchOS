@@ -13,6 +13,12 @@ from typing import Any
 import numpy as np
 import torch
 import yaml
+from dotenv import load_dotenv
+
+# Load .env once, at first import of anything in this project. Without this,
+# GROQ_API_KEY / ANTHROPIC_API_KEY in a .env file are simply never seen, and the
+# documented setup path fails silently. Real environment variables win.
+load_dotenv(override=False)
 
 
 class Config(dict):

@@ -4,6 +4,7 @@
 
 Endpoints:
     GET  /health            corpus size, model ids, whether generation is enabled
+    POST /papers            topic in, ranked papers out
     POST /ask               question answering over the corpus
     POST /explain           resolve a citation and explain the paper it points to
     POST /search            retrieval only, no generation
@@ -65,6 +66,11 @@ class AskRequest(BaseModel):
     generate: bool = True
 
 
+class PapersRequest(BaseModel):
+    topic: str = Field(min_length=3, max_length=1000)
+    top_k: int = Field(default=10, ge=1, le=30)
+
+
 class ExplainRequest(BaseModel):
     citation: str = Field(min_length=3, max_length=2000)
     generate: bool = True
@@ -94,6 +100,25 @@ def search(request: AskRequest) -> dict[str, Any]:
     """Retrieval and reranking only."""
     pipeline: MLPipeline = state["pipeline"]
     return {"query": request.query, "results": pipeline.retrieve(request.query, request.top_k)}
+
+
+@app.post("/papers")
+def papers(request: PapersRequest) -> dict[str, Any]:
+    """Topic in, ranked papers out (not passages)."""
+    pipeline: MLPipeline = state["pipeline"]
+    log: FeedbackLog = state["log"]
+    result = pipeline.find_papers(request.topic, top_k=request.top_k)
+    query_id = log.log_query(
+        query=f"[papers] {request.topic}",
+        answer=None,
+        latency_ms=result["timing_ms"]["total"],
+        backend="retrieval",
+        citations=[
+            {"doc_id": p["doc_id"], "score": p["score"], "title": p["title"]}
+            for p in result["papers"]
+        ],
+    )
+    return {"query_id": query_id, **result}
 
 
 @app.post("/ask")
