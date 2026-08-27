@@ -41,6 +41,40 @@ arXiv API ──► version dedup ──► PDF ──► section-aware ──�
 
 ---
 
+## The corpus as built
+
+| | |
+|---|---|
+| Papers | **903** unique, after version dedup |
+| With full text | 500 (PDF cap; the rest are abstract-only) |
+| Chunks | **18,882** (20.9 per paper) |
+| Newest paper | same-day — the API returns submissions from hours ago |
+| Query latency | **~700–800 ms** end to end, retrieval + rerank, on an RTX 4060 |
+| Disk | 2.7 GB PDFs, 37 MB extracted text |
+
+Chunks by section — the chunker is finding real structure, not guessing:
+
+```
+introduction 3691 · method 3035 · related work 2194 · model 1910
+experiments 1155 · abstract 903 · results 818 · conclusion 779
+```
+
+`abstract = 903` is exactly one per paper, which is the check that the
+abstract-deduplication in `chunking.py` is working.
+
+### Behaviour on real queries
+
+*"explain JEPA"* → **5 distinct papers** in 6 passages at 792 ms, including a critique
+(*"Asleep at the Wheel: JEPA's Limitations"*) and a theory paper
+(*"A Generalization Theory for JEPA-Based World Models"*) alongside the primary ones.
+
+*"how does JEPA differ from masked autoencoders"* → **all 6 passages mention both**
+JEPA and MAE, across 5 papers, drawn from the `related work` and `preliminaries`
+sections where papers actually contrast methods. That is the FR4.2 cap and full-text
+chunking earning their keep together.
+
+---
+
 ## Three decisions worth defending
 
 ### 1. Off-the-shelf reranker, not a fine-tuned one
@@ -90,9 +124,33 @@ useless as an answer. `answer.max_per_paper` forces multi-source results.
 **Version dedup** matters more than it looks. Two near-identical copies of a paper in the
 index split its retrieval signal and would corrupt any future evaluation over it.
 
-**The rejection threshold** acts on a signal the parent project measured but never used:
-an out-of-domain query scored +0.06 where an in-domain one scored +0.60, an order of
-magnitude apart. Below `answer.min_score` the system says it does not know.
+### The rejection threshold, and why it is a mean and not a maximum
+
+The obvious design — reject when the best passage scores below a threshold — **does not
+work**, and measuring it is what showed why:
+
+| Query | max | mean of top-5 | in corpus? |
+|---|---|---|---|
+| explain JEPA | 0.998 | 0.995 | yes |
+| how does JEPA differ from MAE | 0.898 | 0.671 | yes |
+| what causes knee osteoarthritis | **0.670** | 0.190 | **no** |
+| vitamin D and infection | 0.150 | 0.071 | no |
+| sourdough hydration ratio | 0.001 | 0.001 | no |
+| who won the 1998 football world cup | 0.348 | 0.190 | no |
+
+The osteoarthritis query hits **0.670 on max** — high enough to defeat any max-based
+threshold — because the corpus genuinely contains a self-supervised *bone densitometry*
+paper. One real partial match is all it takes.
+
+The mean separates cleanly, because a question that belongs to this corpus matches
+*many* passages rather than one. Threshold: **mean of top-5 ≥ 0.35**, which classifies
+all eight probe queries correctly.
+
+**A scale trap worth knowing:** `CrossEncoder.predict` applies a sigmoid, so torch-backend
+scores are probabilities in `[0, 1]`. The ONNX backend returns **raw logits**. A threshold
+tuned on one is meaningless on the other. The first version of this config used `-6.0`,
+which could never fire against a sigmoid output — the rejection path was silently dead
+code until it was measured.
 
 ---
 
@@ -161,8 +219,9 @@ Honest bounding, same as the parent project.
 - **PDF extraction is imperfect.** Two-column layouts sometimes interleave, and papers
   whose headings do not match the expected pattern fall back to a single unnamed section.
   Equations, tables and figures are dropped entirely.
-- **The rejection threshold is uncalibrated.** `answer.min_score` is a hand-set default,
-  not a value derived from labelled data. It is the first thing phase 2 should calibrate.
+- **The rejection threshold is tuned on eight probe queries, not labelled data.**
+  `answer.min_mean_score` separates those eight correctly, but eight is not a validation
+  set. Phase 2 should calibrate it properly and report a false-accept / false-reject rate.
 - **"Survey what's new" is not supported.** Date-filtered multi-document summarisation was
   explicitly deferred during requirements discovery.
 - **Generation is unevaluated**, as in the parent project. Retrieval is the component

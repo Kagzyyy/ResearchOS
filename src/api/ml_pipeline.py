@@ -7,10 +7,27 @@ five are routinely five paragraphs of the same paper. `max_per_paper` caps that,
 which is what makes "explain" and "compare" answers multi-source.
 
 US5 rejection. The corpus is topic-scoped, so most of the world is out of it.
-Below `min_score` the system says it does not know rather than presenting
-low-scoring unrelated passages as an answer. The parent project showed the raw
-signal is there - an out-of-domain query scored +0.06 against +0.60 in-domain -
-it just never acted on it.
+Below threshold the system says it does not know rather than presenting
+low-scoring unrelated passages as an answer.
+
+The threshold is on the MEAN of the top-N reranker scores, not the maximum,
+because the maximum is not discriminative. Measured on this corpus:
+
+    query                          max     mean-of-5
+    explain JEPA                   0.998     0.995     in corpus
+    how does JEPA differ from MAE  0.898     0.671     in corpus
+    what causes knee osteoarthritis 0.670    0.190     NOT in corpus
+    vitamin D and infection        0.150     0.071     NOT in corpus
+    sourdough hydration ratio      0.001     0.001     NOT in corpus
+
+The osteoarthritis query scores 0.670 on max because the corpus really does
+contain a self-supervised bone-densitometry paper - one genuine partial match is
+enough to defeat a max-based threshold. The mean separates cleanly because a
+query that belongs to this corpus matches *many* passages, not one.
+
+Note the scale: sentence-transformers' CrossEncoder.predict applies a sigmoid,
+so scores are probabilities in [0, 1], not raw logits. The ONNX backend returns
+raw logits instead - if you switch backends you must rescale this threshold.
 """
 
 from __future__ import annotations
@@ -127,17 +144,21 @@ class MLPipeline:
         retrieval_ms = (time.perf_counter() - start) * 1000.0
 
         ac = self.cfg["answer"]
-        best = max((p["score"] for p in passages), default=float("-inf"))
-        confident = best >= ac["min_score"]
+        scores = [p["score"] for p in passages]
+        best = max(scores, default=0.0)
+        n = min(ac.get("confidence_top_n", 5), len(scores))
+        mean_top = sum(sorted(scores, reverse=True)[:n]) / n if n else 0.0
+        confident = mean_top >= ac["min_mean_score"]
 
         answer_text: str | None = None
         generation_ms = 0.0
         if not confident:
             answer_text = (
-                "Nothing in this corpus answers that. The best passage scored "
-                f"{best:.2f}, below the {ac['min_score']:.1f} threshold, which usually "
-                "means the topic is outside the ingested slice of arXiv rather than "
-                "absent from the literature. The closest matches are listed below."
+                "Nothing in this corpus answers that. The top "
+                f"{n} passages averaged {mean_top:.3f}, below the "
+                f"{ac['min_mean_score']:.2f} threshold, which usually means the topic is "
+                "outside the ingested slice of arXiv rather than absent from the "
+                "literature. The closest matches are listed below."
             )
         elif generate:
             gen_start = time.perf_counter()
@@ -150,7 +171,8 @@ class MLPipeline:
             "question": question,
             "answer": answer_text,
             "confident": confident,
-            "top_score": None if best == float("-inf") else round(best, 3),
+            "top_score": round(best, 3),
+            "mean_top_score": round(mean_top, 3),
             "citations": passages,
             "distinct_papers": distinct_papers(passages),
             "generation_configured": is_configured(),
