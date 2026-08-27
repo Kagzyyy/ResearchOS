@@ -25,6 +25,56 @@ Categories: `cs.LG` 1517 · `cs.CV` 1268 · `cs.RO` 1146 · `cs.CL` 926 · `cs.A
 Live checks against this corpus: **8/8** in-corpus vs out-of-corpus queries classified
 correctly, **5/5** citations resolved to the right paper.
 
+## Evaluation
+
+arXiv ships no relevance judgements, so a test set had to be manufactured. Two
+attempts:
+
+**Citation contexts (the principled approach) — abandoned.** Mine "...following [23]..."
+from full text, resolve [23] to an arXiv id, use the sentence as the query. It yielded
+**12 usable pairs**: the corpus starts 2025-11 and those papers cite mostly older work
+that is not indexed. Twelve queries is noise. The miner is kept in
+`src/data/citation_eval.py` — it would work on a corpus with historical depth.
+
+**Passage-to-paper retrieval — what is actually reported.** Take a sentence from a
+paper's body, use it as the query, gold is that paper. Labels are free and exact. The
+chunk the sentence came from is **held out**, so the system must identify the paper from
+its *other* passages — without that, BM25 matches itself verbatim and everything
+saturates at nDCG 0.99.
+
+300 queries, source chunk held out, paper-level scoring (`results/ml_metrics.json`):
+
+| Setup | nDCG@10 | Recall@10 | MAP@10 |
+|---|---|---|---|
+| **BM25 only** | **0.8948** | 0.9300 | **0.8832** |
+| Dense only (bge-small) | 0.5205 | 0.6300 | 0.4864 |
+| BM25 + dense (RRF) | 0.7719 | **0.9367** | 0.7196 |
+| + cross-encoder reranker | 0.8637 | 0.9133 | 0.8477 |
+
+### The uncomfortable result
+
+**BM25 alone beats the full pipeline on this benchmark.** RRF *hurts* precision
+(0.7719 vs 0.8948) because it weights a strong arm and a weak one equally, and the
+reranker only partly recovers the loss.
+
+But look at Recall@10: **RRF is the best row (0.9367)**. Fusion finds papers BM25 misses;
+it just buries them below rank 1. Dense retrieval is contributing recall and costing
+precision, and equal-weight RRF is the wrong trade for this workload.
+
+### What this does and does not prove
+
+It **does** mean the current fusion weighting is miscalibrated for this corpus, and that
+is worth fixing — weighted RRF favouring the lexical arm is the obvious next step.
+
+It does **not** prove dense retrieval is useless here. The queries are verbatim sentences
+from the target paper, which favours lexical matching even with the source chunk removed,
+because a paper's other passages share its vocabulary. Real Find-papers queries are short
+natural-language topics, where the balance should shift toward dense. Measuring *that*
+needs the hand-labelled tier-2 set, which does not exist yet.
+
+Absolute numbers here are optimistic and should not be compared to SciFact or published
+BEIR results. The comparison between rows is the informative part.
+
 ---
 
 ## Quick start
