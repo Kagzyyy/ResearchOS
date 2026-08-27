@@ -1,0 +1,101 @@
+# ResearchOS-ML v1 - topic-scoped arXiv corpus.
+#
+# v1 deliberately ingests a *focused* corpus rather than a thin slice of all of
+# cs.LG. A few thousand full-text papers on the topics you actually ask about is
+# far more useful on a laptop than 300k abstracts you cannot search deeply.
+# Widen `queries` to widen coverage; the cost is ingest time and disk.
+seed: 42
+
+ingest:
+  # Broad AI coverage, not a topic slice. These are the arXiv categories that
+  # hold essentially all AI/ML/DL research.
+  queries:
+    - 'cat:cs.LG'      # machine learning
+    - 'cat:cs.AI'      # artificial intelligence
+    - 'cat:cs.CL'      # computation and language (NLP, LLMs)
+    - 'cat:cs.CV'      # computer vision
+    - 'cat:cs.NE'      # neural and evolutionary computing
+    - 'cat:cs.RO'      # robotics
+    - 'cat:stat.ML'    # statistics - machine learning
+  # Sorted by submission date, so this is the most recent N per category.
+  max_results_per_query: 1400
+  page_size: 100
+  api_delay_seconds: 3.0
+
+  # Abstracts are indexed for everything; full text is capped because PDF
+  # download and parsing dominates ingest time (~6s/paper). Papers outside the
+  # cap are still searchable by abstract, and any paper looked up by citation
+  # gets its full text fetched on demand.
+  full_text: true
+  max_full_text: 900
+  pdf_delay_seconds: 0.5
+
+chunking:
+  max_words: 220            # ~290 tokens, fits the 384-token reranker window
+  overlap_words: 40
+  min_words: 25
+
+retrieval:
+  top_k: 60                 # candidates fused before reranking
+  bm25:
+    k1: 1.5
+    b: 0.75
+    stemmer: english
+  dense:
+    model: BAAI/bge-small-en-v1.5
+    batch_size: 64
+    max_length: 512
+    query_prefix: "Represent this sentence for searching relevant passages: "
+  fusion:
+    rrf_k: 60
+
+# v1 uses the OFF-THE-SHELF reranker, not a fine-tuned one. The parent project's
+# ablation was a null result and most of its gain came from domain adaptation,
+# which we cannot do here without labels. Good chunking buys more per hour.
+# Phase 2 revisits this once tier-1 citation labels exist.
+reranker:
+  backend: torch
+  model: BAAI/bge-reranker-base
+  params: 278M
+  max_length: 384
+  batch_size: 32
+  fp16: true
+
+answer:
+  top_k_passages: 6
+  max_per_paper: 2          # FR4.2 - force multi-source results
+  # US5 rejection. Threshold is on the MEAN of the top-N reranker scores, not
+  # the max: one lucky partial match spikes the max (a knee-osteoarthritis query
+  # hits 0.67 against a bone-densitometry paper) while the mean stays at 0.19.
+  # Scale is [0,1] because CrossEncoder.predict applies a sigmoid. The ONNX
+  # backend returns raw logits instead - rescale if you switch.
+  # Measured: in-corpus mean5 0.67-0.996, out-of-corpus 0.001-0.19.
+  confidence_top_n: 5
+  min_mean_score: 0.35
+  # Groq: free tier, OpenAI-compatible. Model ids change as Groq rotates its
+  # catalogue - if you get a decommissioned-model error, change this line.
+  # gpt-oss models are REASONING models: hidden reasoning counts against
+  # max_tokens, so the budget must be generous or content comes back empty.
+  # Groq rotates its catalogue - llama-3.3-70b-versatile was decommissioned.
+  # List what you actually have: Groq().models.list()
+  model: openai/gpt-oss-120b
+  max_tokens: 2500
+
+# Citation lookup: paste a reference you saw in a paper, get it explained.
+citation:
+  allow_remote: true        # fall back to the arXiv API when not in the corpus
+  fetch_full_text: true     # download the PDF for on-demand papers
+  max_tokens: 3000
+
+server:
+  host: 0.0.0.0
+  api_port: 8100
+  ui_port: 7900
+
+paths:
+  papers: data/arxiv_papers.jsonl
+  chunks: data/arxiv_chunks.jsonl
+  pdf_cache: cache/arxiv/pdf
+  text_cache: cache/arxiv/text
+  index_cache: cache/ml
+  feedback_db: results/ml_feedback.db

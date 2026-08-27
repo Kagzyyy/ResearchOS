@@ -293,6 +293,60 @@ index rebuild.
 
 ---
 
+## Deployment
+
+The corpus and indices are built **offline** and mounted in. Nothing downloads papers at
+request time except the citation-lookup path, which fetches a single PDF on demand.
+
+### Backend
+
+```bash
+docker build -f Dockerfile.ml -t researchos-ml .
+```
+
+```bash
+docker run --rm -p 8100:8100 -e GROQ_API_KEY=$GROQ_API_KEY -v "$PWD/data:/app/data:ro" -v "$PWD/cache/ml:/app/cache/ml" researchos-ml
+```
+
+CPU-only by design — a CUDA base triples the image for a workload that is already
+network-bound on the Groq call. Reranking is ~10x slower on CPU; if you need the GPU,
+run `scripts/serve_ml.py` on the host instead of containerising.
+
+`data/` is mounted **read-only** and holds `arxiv_papers.jsonl` and
+`arxiv_chunks.jsonl`. `cache/ml/` holds the BM25 and FAISS indices — leave it writable
+so the first boot can build them (a few minutes over 40k chunks), or bake them into the
+image to make startup instant. The `HEALTHCHECK` allows a 600s start period for exactly
+that reason.
+
+The model weights are baked at build time, so the first request is not a 500 MB download.
+
+### Frontend
+
+`output: "standalone"` is set, so `npm run build` emits a self-contained server:
+
+```bash
+cd web && npm run build && node .next/standalone/server.js
+```
+
+`NEXT_PUBLIC_API_BASE` is inlined **at build time**, not read at runtime — rebuild when
+the backend URL changes. It is a public value; never put a secret in a `NEXT_PUBLIC_*`
+variable, they ship to the browser.
+
+### Secrets
+
+`GROQ_API_KEY` is read from the environment, or from `.env` (gitignored). It is never
+baked into an image or a bundle. On Windows, write `.env` as **UTF-8** — PowerShell's
+`>` redirection produces UTF-16, which the loader now survives but warns about.
+
+### What this is not
+
+Single-node, single-process, no queue, no autoscaling, no auth, no rate limiting. It
+holds the whole index in memory (~2 GB) and rebuilds it from scratch rather than
+incrementally. That is adequate for one user or a small team and would not survive
+public traffic.
+
+---
+
 ## Limitations
 
 Honest bounding, same as the parent project.

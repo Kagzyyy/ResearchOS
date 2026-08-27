@@ -1,0 +1,14 @@
+.venv/
+.git/
+web/node_modules/
+web/.next/
+cache/arxiv/pdf/
+cache/arxiv/text/
+datasets/
+models/reranker-random/
+models/reranker-hard/
+results/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
