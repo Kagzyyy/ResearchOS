@@ -9,6 +9,22 @@ every claim linked to a passage.
 
 Built on the retrieval stack from the parent project, [ResearchOS](README.md).
 
+## The corpus as shipped
+
+| | |
+|---|---|
+| Papers | **8,330** unique, after version dedup |
+| Chunks | **40,379** |
+| With full text | 900 (PDF cap; the rest are abstract-indexed) |
+| Date range | 2025-11-17 → 2026-08-26 |
+| Query latency | **270 ms – 1.1 s** end to end on an RTX 4060 |
+
+Categories: `cs.LG` 1517 · `cs.CV` 1268 · `cs.RO` 1146 · `cs.CL` 926 · `cs.AI` 832 ·
+`cs.NE` 730 · `stat.ML` 513
+
+Live checks against this corpus: **8/8** in-corpus vs out-of-corpus queries classified
+correctly, **5/5** citations resolved to the right paper.
+
 ---
 
 ## Quick start

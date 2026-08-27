@@ -80,22 +80,69 @@ def _normalise(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower())
 
 
+STOPWORDS = {
+    "the", "a", "an", "of", "for", "with", "and", "in", "on", "to", "via", "using",
+    "all", "you", "need", "is", "are", "we", "our", "its", "that", "this", "from",
+}
+
+
+def _tokens(text: str) -> set[str]:
+    return {w for w in _normalise(text).split() if w not in STOPWORDS and len(w) > 2}
+
+
 def _token_overlap(a: str, b: str) -> float:
-    """Jaccard overlap on content words. Cheap, and good enough for title matching."""
-    stop = {"the", "a", "an", "of", "for", "with", "and", "in", "on", "to", "via", "using"}
-    ta = {w for w in _normalise(a).split() if w not in stop and len(w) > 2}
-    tb = {w for w in _normalise(b).split() if w not in stop and len(w) > 2}
+    """Jaccard overlap on content words. Used for ranking arXiv search results."""
+    ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
         return 0.0
     return len(ta & tb) / len(ta | tb)
 
 
+def _build_idf(papers_by_id: dict[str, dict[str, Any]]) -> dict[str, float]:
+    """Inverse document frequency over corpus titles."""
+    import math
+
+    df: dict[str, int] = {}
+    for meta in papers_by_id.values():
+        for token in _tokens(meta.get("title", "")):
+            df[token] = df.get(token, 0) + 1
+    n = max(1, len(papers_by_id))
+    return {t: math.log(n / (1 + c)) for t, c in df.items()}
+
+
+def _weighted_coverage(query: str, title: str, idf: dict[str, float], default_idf: float) -> float:
+    """How much of the query's *information* the title covers.
+
+    Plain Jaccard fails badly on titles built from common words. "Attention Is
+    All You Need" against "All you need is log" scores 0.60 on Jaccard - three
+    throwaway tokens match and the one word that carries the meaning,
+    "attention", does not. Weighting each token by IDF makes the miss decisive:
+    a rare token that fails to match costs far more than three common ones that
+    do.
+    """
+    qt = _tokens(query)
+    if not qt:
+        return 0.0
+    tt = _tokens(title)
+    total = sum(idf.get(t, default_idf) for t in qt)
+    if total <= 0:
+        return 0.0
+    matched = sum(idf.get(t, default_idf) for t in qt & tt)
+    # Penalise a title that is much longer than the query - it is a different
+    # paper that happens to contain these words.
+    length_penalty = min(1.0, len(qt) / max(1, len(tt))) ** 0.5
+    return (matched / total) * length_penalty
+
+
 def find_in_corpus(
-    query: str, papers_by_id: dict[str, dict[str, Any]], threshold: float = 0.55
+    query: str, papers_by_id: dict[str, dict[str, Any]], threshold: float = 0.72
 ) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
     """Best local title match, plus runners-up for disambiguation."""
+    idf = _build_idf(papers_by_id)
+    default_idf = max(idf.values(), default=1.0)
     scored = [
-        (_token_overlap(query, meta.get("title", "")), meta) for meta in papers_by_id.values()
+        (_weighted_coverage(query, meta.get("title", ""), idf, default_idf), meta)
+        for meta in papers_by_id.values()
     ]
     scored.sort(key=lambda kv: kv[0], reverse=True)
     candidates = [
