@@ -27,3 +27,7 @@ wandb/
 
 # SQLite citation-click log
 *.db
+
+# arXiv ingestion artefacts - rebuildable, and large
+data/arxiv_papers.jsonl
+data/arxiv_chunks.jsonl
