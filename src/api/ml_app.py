@@ -1,10 +1,16 @@
-"""FastAPI app for ResearchOS-ML.
+"""FastAPI backend for ResearchOS-ML.
 
-Same surface as the parent project's app so the Gradio UI works against either,
-plus the fields this corpus needs: paper ids, arXiv links, section names and the
-US5 confidence flag.
+    RESEARCHOS_ML_CONFIG=configs/ml.yaml uvicorn src.api.ml_app:app --port 8100
 
-    RESEARCHOS_ML_CONFIG=configs/ml.yaml uvicorn src.api.ml_app:app
+Endpoints:
+    GET  /health            corpus size, model ids, whether generation is enabled
+    POST /ask               question answering over the corpus
+    POST /explain           resolve a citation and explain the paper it points to
+    POST /search            retrieval only, no generation
+    POST /feedback/click    log which citation a user opened
+    GET  /stats             feedback counts
+
+CORS is open to localhost origins so the Next.js dev server can call it.
 """
 
 from __future__ import annotations
@@ -14,9 +20,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.api.db import FeedbackLog
+from src.api.llm import is_configured
 from src.api.ml_pipeline import MLPipeline
 from src.config import load_config
 
@@ -37,15 +45,28 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="ResearchOS-ML",
-    description="Question answering over recent arXiv ML/AI papers.",
+    description="Search, explain and de-reference AI research papers.",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 class AskRequest(BaseModel):
     query: str = Field(min_length=3, max_length=1000)
     top_k: int = Field(default=6, ge=1, le=20)
+    generate: bool = True
+
+
+class ExplainRequest(BaseModel):
+    citation: str = Field(min_length=3, max_length=2000)
     generate: bool = True
 
 
@@ -57,11 +78,14 @@ class ClickRequest(BaseModel):
 @app.get("/health")
 def health() -> dict[str, Any]:
     pipeline: MLPipeline | None = state.get("pipeline")
+    cfg = state.get("cfg", {})
     return {
         "status": "ok" if pipeline else "loading",
         "chunks": len(pipeline.corpus) if pipeline else 0,
-        "papers": len(pipeline.papers) if pipeline else 0,
-        "reranker_model": state["cfg"]["reranker"]["model"] if "cfg" in state else None,
+        "papers": len(pipeline.papers_by_id) if pipeline else 0,
+        "reranker_model": cfg.get("reranker", {}).get("model"),
+        "llm_model": cfg.get("answer", {}).get("model"),
+        "generation_enabled": is_configured(),
     }
 
 
@@ -69,22 +93,37 @@ def health() -> dict[str, Any]:
 def search(request: AskRequest) -> dict[str, Any]:
     """Retrieval and reranking only."""
     pipeline: MLPipeline = state["pipeline"]
-    return {"query": request.query, "results": pipeline.retrieve(request.query)[: request.top_k]}
+    return {"query": request.query, "results": pipeline.retrieve(request.query, request.top_k)}
 
 
 @app.post("/ask")
 def ask(request: AskRequest) -> dict[str, Any]:
-    """Full pipeline, logged."""
+    """Question answering, logged."""
     pipeline: MLPipeline = state["pipeline"]
     log: FeedbackLog = state["log"]
-
     result = pipeline.answer(request.query, generate=request.generate)
     query_id = log.log_query(
         query=request.query,
         answer=result["answer"],
         latency_ms=result["timing_ms"]["total"],
-        backend="torch",
+        backend="groq" if result["generation_configured"] else "retrieval-only",
         citations=result["citations"],
+    )
+    return {"query_id": query_id, **result}
+
+
+@app.post("/explain")
+def explain(request: ExplainRequest) -> dict[str, Any]:
+    """Resolve a citation to its paper and explain it in plain terms."""
+    pipeline: MLPipeline = state["pipeline"]
+    log: FeedbackLog = state["log"]
+    result = pipeline.explain_citation(request.citation, generate=request.generate)
+    query_id = log.log_query(
+        query=f"[explain] {request.citation}",
+        answer=result.get("explanation"),
+        latency_ms=result["timing_ms"]["total"],
+        backend="groq" if result["generation_configured"] else "retrieval-only",
+        citations=result.get("passages", []),
     )
     return {"query_id": query_id, **result}
 

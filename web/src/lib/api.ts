@@ -1,0 +1,92 @@
+/** Typed client for the ResearchOS-ML FastAPI backend. */
+
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8100";
+
+export interface Passage {
+  chunk_id: string;
+  doc_id: string;
+  paper_id: string;
+  arxiv_url: string;
+  score: number;
+  title: string;
+  section: string;
+  published: string;
+  text: string;
+}
+
+export interface AskResult {
+  query_id: number;
+  question: string;
+  answer: string | null;
+  confident: boolean;
+  top_score: number;
+  mean_top_score: number;
+  citations: Passage[];
+  distinct_papers: number;
+  generation_configured: boolean;
+  timing_ms: { retrieval_and_rerank: number; generation: number; total: number };
+}
+
+export interface PaperMeta {
+  paper_id: string;
+  title: string;
+  abstract: string;
+  authors: string[];
+  published: string;
+  primary_category: string;
+  arxiv_url: string;
+  has_full_text: boolean;
+}
+
+export interface ExplainResult {
+  query_id: number;
+  citation: string;
+  resolved: boolean;
+  method: string;
+  query_used: string;
+  from_corpus?: boolean;
+  candidates: { paper_id: string; title: string; score: string }[];
+  paper: PaperMeta | null;
+  explanation: string | null;
+  passages: Passage[];
+  related: Passage[];
+  generation_configured: boolean;
+  timing_ms: { total: number; generation?: number };
+}
+
+export interface Health {
+  status: string;
+  chunks: number;
+  papers: number;
+  reranker_model: string | null;
+  llm_model: string | null;
+  generation_enabled: boolean;
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`${path} failed: ${res.status} ${await res.text().catch(() => "")}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export const ask = (query: string, topK = 6) =>
+  post<AskResult>("/ask", { query, top_k: topK, generate: true });
+
+export const explain = (citation: string) =>
+  post<ExplainResult>("/explain", { citation, generate: true });
+
+export const logClick = (queryId: number, docId: string) =>
+  post<{ logged: boolean }>("/feedback/click", { query_id: queryId, doc_id: docId });
+
+export async function health(): Promise<Health> {
+  const res = await fetch(`${API_BASE}/health`);
+  if (!res.ok) throw new Error(`health failed: ${res.status}`);
+  return res.json();
+}

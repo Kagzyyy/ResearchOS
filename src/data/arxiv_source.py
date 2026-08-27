@@ -69,13 +69,24 @@ def fetch_metadata(
     max_results: int,
     page_size: int = 100,
     delay_seconds: float = 3.0,
+    sort_by_relevance: bool = False,
 ) -> list[Paper]:
-    """Run one arXiv API query and return papers, newest first."""
+    """Run one arXiv API query and return papers.
+
+    Ingestion wants newest-first (build a current corpus). Citation lookup wants
+    relevance - sorting a title search by date returns the most *recent* papers
+    whose titles match, so a foundational paper like "Attention Is All You Need"
+    is buried under every recent paper that echoes its title.
+    """
     client = arxiv.Client(page_size=page_size, delay_seconds=delay_seconds, num_retries=3)
     search = arxiv.Search(
         query=query,
         max_results=max_results,
-        sort_by=arxiv.SortCriterion.SubmittedDate,
+        sort_by=(
+            arxiv.SortCriterion.Relevance
+            if sort_by_relevance
+            else arxiv.SortCriterion.SubmittedDate
+        ),
     )
 
     papers: list[Paper] = []

@@ -31,3 +31,9 @@ wandb/
 # arXiv ingestion artefacts - rebuildable, and large
 data/arxiv_papers.jsonl
 data/arxiv_chunks.jsonl
+
+# Next.js frontend
+web/node_modules/
+web/.next/
+web/out/
+web/.env.local

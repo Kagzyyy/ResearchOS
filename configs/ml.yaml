@@ -7,18 +7,27 @@
 seed: 42
 
 ingest:
+  # Broad AI coverage, not a topic slice. These are the arXiv categories that
+  # hold essentially all AI/ML/DL research.
   queries:
-    - 'cat:cs.LG AND (abs:"world model" OR abs:"JEPA" OR abs:"joint embedding predictive")'
-    - 'cat:cs.CV AND (abs:"self-supervised" OR abs:"masked autoencoder" OR abs:"representation learning")'
-    - 'cat:cs.LG AND (abs:"world model" OR abs:"model-based reinforcement learning")'
-    - 'cat:cs.CL AND (abs:"large language model" AND (abs:"reasoning" OR abs:"reinforcement learning"))'
-    - 'cat:cs.AI AND (abs:"planning" AND abs:"latent")'
-  max_results_per_query: 220
+    - 'cat:cs.LG'      # machine learning
+    - 'cat:cs.AI'      # artificial intelligence
+    - 'cat:cs.CL'      # computation and language (NLP, LLMs)
+    - 'cat:cs.CV'      # computer vision
+    - 'cat:cs.NE'      # neural and evolutionary computing
+    - 'cat:cs.RO'      # robotics
+    - 'cat:stat.ML'    # statistics - machine learning
+  # Sorted by submission date, so this is the most recent N per category.
+  max_results_per_query: 1400
   page_size: 100
   api_delay_seconds: 3.0
 
+  # Abstracts are indexed for everything; full text is capped because PDF
+  # download and parsing dominates ingest time (~6s/paper). Papers outside the
+  # cap are still searchable by abstract, and any paper looked up by citation
+  # gets its full text fetched on demand.
   full_text: true
-  max_full_text: 500        # cap PDF downloads; abstracts still indexed for the rest
+  max_full_text: 900
   pdf_delay_seconds: 0.5
 
 chunking:
@@ -63,8 +72,16 @@ answer:
   # Measured: in-corpus mean5 0.67-0.996, out-of-corpus 0.001-0.19.
   confidence_top_n: 5
   min_mean_score: 0.35
-  model: claude-sonnet-4-6
+  # Groq: free tier, OpenAI-compatible. Model ids change as Groq rotates its
+  # catalogue - if you get a decommissioned-model error, change this line.
+  model: llama-3.3-70b-versatile
   max_tokens: 1200
+
+# Citation lookup: paste a reference you saw in a paper, get it explained.
+citation:
+  allow_remote: true        # fall back to the arXiv API when not in the corpus
+  fetch_full_text: true     # download the PDF for on-demand papers
+  max_tokens: 1400
 
 server:
   host: 127.0.0.1

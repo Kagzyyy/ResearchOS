@@ -32,7 +32,12 @@ gradio==6.26.0
 httpx==0.28.1
 pydantic==2.13.4
 
+# --- corpus ingestion (ResearchOS-ML) ---
+arxiv==4.0.1
+pymupdf==1.28.2
+
 # --- generation, config, tracking ---
+groq==1.7.0
 anthropic==1.0.0
 PyYAML==6.0.3
 python-dotenv==1.2.3

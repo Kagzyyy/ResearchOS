@@ -1,33 +1,36 @@
-"""ResearchOS-ML serving pipeline: retrieve -> fuse -> rerank -> diversify -> answer.
+"""ResearchOS-ML pipeline: retrieve -> fuse -> rerank -> diversify -> answer.
 
-Two things differ from the parent project's pipeline, both forced by the corpus:
+Two capabilities:
+
+  ask()              question answering over the ingested corpus
+  explain_citation() resolve a citation you saw in a paper, then explain it
+
+Three things differ from the parent project's pipeline, all forced by the corpus:
 
 FR4.2 diversification. One paper produces dozens of chunks, so the top-scoring
 five are routinely five paragraphs of the same paper. `max_per_paper` caps that,
 which is what makes "explain" and "compare" answers multi-source.
 
-US5 rejection. The corpus is topic-scoped, so most of the world is out of it.
-Below threshold the system says it does not know rather than presenting
-low-scoring unrelated passages as an answer.
+US5 rejection. The threshold is on the MEAN of the top-N reranker scores, not
+the maximum, because the maximum is not discriminative. Measured on this corpus:
 
-The threshold is on the MEAN of the top-N reranker scores, not the maximum,
-because the maximum is not discriminative. Measured on this corpus:
+    query                           max     mean-of-5
+    explain JEPA                    0.998     0.995     in corpus
+    how does JEPA differ from MAE   0.898     0.671     in corpus
+    what causes knee osteoarthritis 0.670     0.190     NOT in corpus
+    sourdough hydration ratio       0.001     0.001     NOT in corpus
 
-    query                          max     mean-of-5
-    explain JEPA                   0.998     0.995     in corpus
-    how does JEPA differ from MAE  0.898     0.671     in corpus
-    what causes knee osteoarthritis 0.670    0.190     NOT in corpus
-    vitamin D and infection        0.150     0.071     NOT in corpus
-    sourdough hydration ratio      0.001     0.001     NOT in corpus
+The osteoarthritis query hits 0.670 on max because the corpus really does
+contain a self-supervised bone-densitometry paper - one genuine partial match
+defeats a max-based threshold. The mean separates cleanly, because a query that
+belongs to this corpus matches *many* passages, not one.
 
-The osteoarthritis query scores 0.670 on max because the corpus really does
-contain a self-supervised bone-densitometry paper - one genuine partial match is
-enough to defeat a max-based threshold. The mean separates cleanly because a
-query that belongs to this corpus matches *many* passages, not one.
+Scale note: CrossEncoder.predict applies a sigmoid, so torch-backend scores are
+probabilities in [0,1]. The ONNX backend returns raw logits - rescale if you
+switch backends.
 
-Note the scale: sentence-transformers' CrossEncoder.predict applies a sigmoid,
-so scores are probabilities in [0, 1], not raw logits. The ONNX backend returns
-raw logits instead - if you switch backends you must rescale this threshold.
+Citation resolution is local-first, then arXiv on demand, so the tool is not
+limited to whatever was ingested.
 """
 
 from __future__ import annotations
@@ -35,9 +38,11 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.api.generate import generate_answer, is_configured
+from src.api.llm import explain_paper, generate_answer, is_configured
 from src.config import device
-from src.data.chunking import chunks_to_corpus, read_chunks
+from src.data.arxiv_source import Paper, read_papers
+from src.data.chunking import chunk_paper, chunks_to_corpus, read_chunks
+from src.data.citation import resolve
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.dense import DenseRetriever
 from src.retrieval.diversify import cap_per_paper, distinct_papers
@@ -55,7 +60,12 @@ class MLPipeline:
 
         chunks = read_chunks(paths["chunks"])
         self.corpus = chunks_to_corpus(chunks)
-        self.papers = {c.paper_id: c.title for c in chunks}
+        self.chunks_by_paper: dict[str, list[str]] = {}
+        for chunk in chunks:
+            self.chunks_by_paper.setdefault(chunk.paper_id, []).append(chunk.chunk_id)
+
+        # Full paper records, for citation resolution and metadata display.
+        self.papers_by_id = {p.paper_id: vars(p) for p in read_papers(paths["papers"])}
 
         doc_ids = list(self.corpus.keys())
         doc_texts = [
@@ -94,71 +104,72 @@ class MLPipeline:
         self.rrf_k = rc["fusion"]["rrf_k"]
         self.retrieve_k = rc["top_k"]
         print(
-            f"[ml] ready | {len(self.corpus)} chunks from {len(self.papers)} papers "
-            f"| reranker={mc['model']}"
+            f"[ml] ready | {len(self.corpus)} chunks from {len(self.papers_by_id)} papers "
+            f"| reranker={mc['model']} | llm={'groq' if is_configured() else 'disabled'}"
         )
 
-    def retrieve(self, question: str) -> list[dict[str, Any]]:
+    # ---------------------------------------------------------------- helpers
+
+    def _passage(self, chunk_id: str, score: float) -> dict[str, Any]:
+        entry = self.corpus[chunk_id]
+        return {
+            "chunk_id": chunk_id,
+            "doc_id": chunk_id,
+            "paper_id": entry["paper_id"],
+            "arxiv_url": f"https://arxiv.org/abs/{entry['paper_id']}",
+            "score": float(score),
+            "title": entry["title"],
+            "section": entry["section"],
+            "published": entry["published"],
+            "text": entry["text"],
+        }
+
+    def _confidence(self, scores: list[float]) -> tuple[float, float, bool]:
+        ac = self.cfg["answer"]
+        best = max(scores, default=0.0)
+        n = min(ac.get("confidence_top_n", 5), len(scores))
+        mean_top = sum(sorted(scores, reverse=True)[:n]) / n if n else 0.0
+        return best, mean_top, mean_top >= ac["min_mean_score"]
+
+    # ------------------------------------------------------------- retrieval
+
+    def retrieve(self, question: str, top_k: int | None = None) -> list[dict[str, Any]]:
         """Hybrid retrieve, fuse, rerank, then cap chunks per paper."""
         query_map = {PSEUDO_QID: question}
         bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
         dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
-        fused = reciprocal_rank_fusion(
-            [bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k
-        )
+        fused = reciprocal_rank_fusion([bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k)
 
-        reranked, _timings = self.reranker.rerank(
-            query_map, fused, self.corpus, top_k=self.retrieve_k
-        )
+        reranked, _ = self.reranker.rerank(query_map, fused, self.corpus, top_k=self.retrieve_k)
 
         ac = self.cfg["answer"]
         selected = cap_per_paper(
             reranked[PSEUDO_QID],
             self.corpus,
-            top_k=ac["top_k_passages"],
+            top_k=top_k or ac["top_k_passages"],
             max_per_paper=ac["max_per_paper"],
         )
+        return [self._passage(cid, s) for cid, s in selected]
 
-        results: list[dict[str, Any]] = []
-        for chunk_id, score in selected:
-            entry = self.corpus[chunk_id]
-            results.append(
-                {
-                    "chunk_id": chunk_id,
-                    "doc_id": chunk_id,  # generate.py speaks doc_id
-                    "paper_id": entry["paper_id"],
-                    "arxiv_url": f"https://arxiv.org/abs/{entry['paper_id']}",
-                    "score": float(score),
-                    "title": entry["title"],
-                    "section": entry["section"],
-                    "published": entry["published"],
-                    "text": entry["text"],
-                }
-            )
-        return results
+    # ------------------------------------------------------------------- ask
 
     def answer(self, question: str, generate: bool = True) -> dict[str, Any]:
-        """Full pipeline, including the US5 rejection path."""
+        """Question answering, including the US5 rejection path."""
         start = time.perf_counter()
         passages = self.retrieve(question)
         retrieval_ms = (time.perf_counter() - start) * 1000.0
 
         ac = self.cfg["answer"]
-        scores = [p["score"] for p in passages]
-        best = max(scores, default=0.0)
-        n = min(ac.get("confidence_top_n", 5), len(scores))
-        mean_top = sum(sorted(scores, reverse=True)[:n]) / n if n else 0.0
-        confident = mean_top >= ac["min_mean_score"]
+        best, mean_top, confident = self._confidence([p["score"] for p in passages])
 
         answer_text: str | None = None
         generation_ms = 0.0
         if not confident:
             answer_text = (
-                "Nothing in this corpus answers that. The top "
-                f"{n} passages averaged {mean_top:.3f}, below the "
-                f"{ac['min_mean_score']:.2f} threshold, which usually means the topic is "
-                "outside the ingested slice of arXiv rather than absent from the "
-                "literature. The closest matches are listed below."
+                f"Nothing in this corpus answers that. The top passages averaged "
+                f"{mean_top:.3f}, below the {ac['min_mean_score']:.2f} threshold, which "
+                "usually means the topic is outside the ingested slice of arXiv rather "
+                "than absent from the literature. The closest matches are below."
             )
         elif generate:
             gen_start = time.perf_counter()
@@ -180,5 +191,125 @@ class MLPipeline:
                 "retrieval_and_rerank": round(retrieval_ms, 1),
                 "generation": round(generation_ms, 1),
                 "total": round(retrieval_ms + generation_ms, 1),
+            },
+        }
+
+    # ------------------------------------------------------- citation lookup
+
+    def _passages_for_paper(self, paper: Paper, from_corpus: bool) -> list[dict[str, Any]]:
+        """Passages describing one specific paper.
+
+        Indexed papers use their stored chunks. A paper fetched on demand is
+        chunked in memory - it is not added to the index, because rebuilding the
+        index per lookup would be far slower than the lookup itself.
+        """
+        if from_corpus and paper.paper_id in self.chunks_by_paper:
+            chunk_ids = self.chunks_by_paper[paper.paper_id]
+            ordered = sorted(chunk_ids, key=lambda c: self.corpus[c]["section"] != "abstract")
+            return [self._passage(cid, 1.0) for cid in ordered[:8]]
+
+        chunks = chunk_paper(
+            paper,
+            max_words=self.cfg["chunking"]["max_words"],
+            overlap_words=self.cfg["chunking"]["overlap_words"],
+            min_words=self.cfg["chunking"]["min_words"],
+        )[:8]
+        return [
+            {
+                "chunk_id": c.chunk_id,
+                "doc_id": c.chunk_id,
+                "paper_id": c.paper_id,
+                "arxiv_url": f"https://arxiv.org/abs/{c.paper_id}",
+                "score": 1.0,
+                "title": c.title,
+                "section": c.section,
+                "published": c.published,
+                "text": c.text,
+            }
+            for c in chunks
+        ]
+
+    def explain_citation(self, citation: str, generate: bool = True) -> dict[str, Any]:
+        """Resolve a citation string to a paper and explain it.
+
+        Returns the explanation plus `related`: what else in the corpus talks
+        about this paper, which is where the "and here is the wider context"
+        half of the answer comes from.
+        """
+        start = time.perf_counter()
+        resolution = resolve(
+            citation,
+            self.papers_by_id,
+            allow_remote=self.cfg["citation"]["allow_remote"],
+            fetch_full_text=self.cfg["citation"]["fetch_full_text"],
+            pdf_dir=self.cfg["paths"]["pdf_cache"],
+            text_dir=self.cfg["paths"]["text_cache"],
+        )
+
+        if resolution.paper is None:
+            return {
+                "citation": citation,
+                "resolved": False,
+                "method": resolution.method,
+                "query_used": resolution.query_used,
+                "candidates": resolution.candidates,
+                "explanation": (
+                    "Could not resolve that citation to a paper. Try the arXiv id, or the "
+                    "paper title on its own."
+                ),
+                "paper": None,
+                "passages": [],
+                "related": [],
+                "generation_configured": is_configured(),
+                "timing_ms": {"total": round((time.perf_counter() - start) * 1000.0, 1)},
+            }
+
+        paper = resolution.paper
+        passages = self._passages_for_paper(paper, resolution.from_corpus)
+
+        # What else in the corpus discusses this work - the wider-context half.
+        related_query = f"{paper.title} {paper.abstract[:300]}"
+        related = [
+            p
+            for p in self.retrieve(related_query, top_k=6)
+            if p["paper_id"] != paper.paper_id
+        ][:4]
+
+        explanation: str | None = None
+        gen_ms = 0.0
+        if generate:
+            gen_start = time.perf_counter()
+            explanation = explain_paper(
+                paper.title,
+                passages + related,
+                model=self.cfg["answer"]["model"],
+                max_tokens=self.cfg["citation"]["max_tokens"],
+            )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+
+        return {
+            "citation": citation,
+            "resolved": True,
+            "method": resolution.method,
+            "query_used": resolution.query_used,
+            "from_corpus": resolution.from_corpus,
+            "candidates": resolution.candidates,
+            "paper": {
+                "paper_id": paper.paper_id,
+                "title": paper.title,
+                "abstract": paper.abstract,
+                "authors": paper.authors[:8],
+                "published": paper.published,
+                "primary_category": paper.primary_category,
+                "arxiv_url": f"https://arxiv.org/abs/{paper.paper_id}",
+                "has_full_text": bool(paper.full_text),
+            },
+            "explanation": explanation,
+            "passages": passages,
+            "related": related,
+            "generation_configured": is_configured(),
+            "timing_ms": {
+                "total": round((time.perf_counter() - start) * 1000.0, 1),
+                "generation": round(gen_ms, 1),
             },
         }
