@@ -20,7 +20,9 @@ still non-negotiable:
 from __future__ import annotations
 
 import os
+import random
 import re
+import time
 from typing import Any
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
@@ -97,20 +99,50 @@ def is_configured() -> bool:
     return bool(os.environ.get("GROQ_API_KEY"))
 
 
-def _complete(system: str, user: str, model: str, max_tokens: int, temperature: float) -> str:
+def _complete(
+    system: str,
+    user: str,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    retries: int = 4,
+    timeout_s: float = 90.0,
+) -> str:
+    """One completion, retrying transient failures.
+
+    The free tier rate-limits readily once more than one person is using the
+    app. Without backoff a 429 surfaces to the user as a failed request, which
+    is the most common way a small deployment looks broken while being fine.
+    """
     from groq import Groq
 
-    client = Groq()
-    response = client.chat.completions.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        # No tools. Retrieved text must not reach any tool-calling path.
-    )
+    client = Groq(timeout=timeout_s, max_retries=0)  # retry policy is ours, below
+    last: Exception | None = None
+    for attempt in range(retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                # No tools. Retrieved text must not reach any tool-calling path.
+            )
+            break
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            message = str(exc).lower()
+            transient = any(
+                t in message for t in ("rate", "429", "timeout", "503", "502", "overload")
+            )
+            if attempt == retries - 1 or not transient:
+                raise
+            time.sleep(min(30.0, 2.0 * (2**attempt)) + random.random())
+    else:  # pragma: no cover - loop always breaks or raises
+        raise last or RuntimeError("completion failed")
+
     choice = response.choices[0]
     text = (choice.message.content or "").strip()
     if not text:

@@ -35,6 +35,7 @@ limited to whatever was ingested.
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -101,6 +102,12 @@ class MLPipeline:
             fp16=mc.get("fp16", True) and device() == "cuda",
         )
 
+        # One GPU, one model, many HTTP threads. FastAPI runs sync endpoints in
+        # a threadpool, so without this two concurrent users would drive
+        # forward passes through the same CUDA module simultaneously - which
+        # risks wrong results and VRAM spikes. Retrieval is fast enough
+        # (sub-second) that serialising it costs little.
+        self._gpu_lock = threading.Lock()
         self.rrf_k = rc["fusion"]["rrf_k"]
         self.retrieve_k = rc["top_k"]
         print(
@@ -136,11 +143,15 @@ class MLPipeline:
     def retrieve(self, question: str, top_k: int | None = None) -> list[dict[str, Any]]:
         """Hybrid retrieve, fuse, rerank, then cap chunks per paper."""
         query_map = {PSEUDO_QID: question}
-        bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
-        dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
-        fused = reciprocal_rank_fusion([bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k)
-
-        reranked, _ = self.reranker.rerank(query_map, fused, self.corpus, top_k=self.retrieve_k)
+        with self._gpu_lock:
+            bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
+            dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
+            fused = reciprocal_rank_fusion(
+                [bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k
+            )
+            reranked, _ = self.reranker.rerank(
+                query_map, fused, self.corpus, top_k=self.retrieve_k
+            )
 
         ac = self.cfg["answer"]
         selected = cap_per_paper(
@@ -168,10 +179,15 @@ class MLPipeline:
         start = time.perf_counter()
         query_map = {PSEUDO_QID: topic}
 
-        bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
-        dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
-        fused = reciprocal_rank_fusion([bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k)
-        reranked, _ = self.reranker.rerank(query_map, fused, self.corpus, top_k=self.retrieve_k)
+        with self._gpu_lock:
+            bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
+            dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
+            fused = reciprocal_rank_fusion(
+                [bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k
+            )
+            reranked, _ = self.reranker.rerank(
+                query_map, fused, self.corpus, top_k=self.retrieve_k
+            )
 
         grouped: dict[str, dict[str, Any]] = {}
         for chunk_id, score in reranked[PSEUDO_QID].items():
