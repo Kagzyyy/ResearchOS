@@ -48,8 +48,8 @@ def _safe_fetch(query: str, max_results: int) -> list[Paper]:
     """
     try:
         return fetch_metadata(
-            query, max_results=max_results, delay_seconds=1.0,
-            sort_by_relevance=True, num_retries=1, use_cache=True,
+            query, max_results=max_results, delay_seconds=0.0,
+            sort_by_relevance=True, num_retries=0, use_cache=True,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[arxiv] lookup failed ({type(exc).__name__}); degrading")
@@ -70,30 +70,58 @@ class Resolution:
 QUESTION_STARTS = (
     "what", "how", "why", "when", "where", "which", "who", "explain", "describe",
     "compare", "does", "do ", "is ", "are ", "can ", "should", "tell me", "give me",
+    "summarise", "summarize", "define",
+)
+
+# What a citation actually looks like. Anything matching one of these is worth
+# the cost of resolution; nothing else is.
+_CITATION_SHAPES = (
+    re.compile(r"et\s+al", re.IGNORECASE),          # Assran et al.
+    re.compile(r"^\s*[\[\(]\d{1,3}[\]\)]"),              # [23] or (23)
+    re.compile(r"^\s*\d{1,3}\.\s+[A-Z]"),                # 23. Author
+    re.compile(r"\((?:19|20)\d{2}\)"),                   # (2023)
+    re.compile(r",\s*(?:19|20)\d{2}"),                 # , 2023
+    re.compile(r"(?:CVPR|NeurIPS|ICML|ICLR|ACL|EMNLP|AAAI|SIGGRAPH)"),
+    re.compile(r"arxiv", re.IGNORECASE),
+    re.compile(r"[\"“‘']([^\"”’']{15,})[\"”’']"),  # a quoted title
 )
 
 
-def looks_like_a_question(text: str) -> bool:
-    """True when the input is a question, not a reference.
+def looks_like_a_citation(text: str) -> bool:
+    """True only when the text has the shape of a reference.
 
-    Worth checking before anything else: resolving a question as if it were a
-    paper title costs two arXiv searches that cannot succeed, and arXiv rate
-    limits at 429 with multi-second retries. A user typing "explain how context
-    is found in LLMs" waited a minute for two doomed lookups and then an error.
+    The default matters. Selecting a phrase in a paper - "MLP block of
+    Transformers" - is asking about a concept, not naming a paper. Treating it
+    as a title costs two arXiv title searches that cannot succeed, and arXiv
+    rate-limits: one such selection took 34 seconds to fail. Citations announce
+    themselves (an id, "et al.", a bracketed number, a year, a venue); concepts
+    do not, so concepts are the default and resolution is opt-in.
     """
-    lowered = (text or "").strip().lower()
-    if not lowered:
+    raw = (text or "").strip()
+    if not raw:
         return False
-    if extract_arxiv_id(lowered):
-        return False                       # an id is never a question
-    if lowered.endswith("?"):
+    if extract_arxiv_id(raw):
         return True
-    if lowered.startswith(QUESTION_STARTS):
+    if any(shape.search(raw) for shape in _CITATION_SHAPES):
         return True
-    # Reference-shaped: a bracketed marker, "et al.", or a year in parentheses.
-    if REF_MARKER_RE.match(text) or "et al" in lowered or re.search(r"\((?:19|20)\d{2}\)", text):
-        return False
+    # A bare title: long, no trailing question mark, and mostly capitalised
+    # words - "Masked Autoencoders Are Scalable Vision Learners".
+    words = raw.split()
+    if 4 <= len(words) <= 25 and not raw.endswith("?"):
+        capitalised = sum(1 for w in words if w[:1].isupper())
+        if capitalised >= max(3, len(words) * 0.5):
+            return True
     return False
+
+
+def looks_like_a_question(text: str) -> bool:
+    """Anything that is not shaped like a citation is treated as a question."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if raw.endswith("?") or raw.lower().startswith(QUESTION_STARTS):
+        return True
+    return not looks_like_a_citation(raw)
 
 
 def extract_arxiv_id(text: str) -> str | None:

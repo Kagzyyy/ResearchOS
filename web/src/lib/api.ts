@@ -4,6 +4,17 @@ export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8100";
 
 /**
+ * A deployed site pointing at localhost is broken for every visitor except the
+ * person who built it - their browser resolves localhost to their own machine.
+ * Detecting it lets the UI explain that, instead of showing a generic network
+ * error that looks like the whole app is down.
+ */
+export const IS_MISCONFIGURED =
+  typeof window !== "undefined" &&
+  !/^(localhost|127\.0\.0\.1)$/.test(window.location.hostname) &&
+  /^https?:\/\/(localhost|127\.0\.0\.1)/.test(API_BASE);
+
+/**
  * Shared access token. Inlined into the client bundle, so it is a deterrent
  * against drive-by abuse of your Groq quota, not a secret. Anyone who can load
  * the page can read it. Do not use it to protect anything that matters.

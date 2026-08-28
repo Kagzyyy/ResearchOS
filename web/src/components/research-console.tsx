@@ -23,6 +23,7 @@ import {
   explain,
   findPapers,
   health,
+  IS_MISCONFIGURED,
   logClick,
   uploadPdf,
   vote,
@@ -162,7 +163,9 @@ export function ResearchConsole() {
         <p className="mt-2 text-sm text-slate-400">
           {status
             ? `${status.papers.toLocaleString()} papers · ${status.chunks.toLocaleString()} passages · reranked by ${status.reranker_model?.split("/").pop()}`
-            : "Backend not reachable — start the API on port 8100."}
+            : IS_MISCONFIGURED
+              ? "Not connected — this deployment has no backend address configured."
+              : "Connecting to the search backend…"}
           {status && !status.generation_enabled && (
             <span className="ml-2 text-amber-400">· GROQ_API_KEY unset, no written answers</span>
           )}
@@ -261,7 +264,7 @@ export function ResearchConsole() {
           </div>
           <button
             onClick={() => run()}
-            disabled={loading || input.trim().length < 3}
+            disabled={loading || !status || input.trim().length < 3}
             className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Search size={15} />
@@ -330,6 +333,23 @@ export function ResearchConsole() {
                 : "Retrieving, reranking, then writing an answer…"}
           </p>
         </div>
+      )}
+
+      {!status && (
+        <Callout tone="amber" title={IS_MISCONFIGURED ? "This deployment isn't finished" : "Waiting for the backend"}>
+          {IS_MISCONFIGURED ? (
+            <>
+              The site is live but no search backend is reachable from here. Whoever
+              deployed it needs to set <code>NEXT_PUBLIC_API_BASE</code> to a public
+              HTTPS address and redeploy.
+            </>
+          ) : (
+            <>
+              The backend loads 40,000 passages and two models on start, which takes
+              two to three minutes. This will clear on its own — no need to refresh.
+            </>
+          )}
+        </Callout>
       )}
 
       {error && (
