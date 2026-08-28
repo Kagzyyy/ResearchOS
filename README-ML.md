@@ -27,53 +27,84 @@ correctly, **5/5** citations resolved to the right paper.
 
 ## Evaluation
 
-arXiv ships no relevance judgements, so a test set had to be manufactured. Two
-attempts:
+arXiv ships no relevance judgements, so test sets had to be manufactured. Three attempts,
+and the failures are as informative as the numbers.
 
-**Citation contexts (the principled approach) — abandoned.** Mine "...following [23]..."
-from full text, resolve [23] to an arXiv id, use the sentence as the query. It yielded
-**12 usable pairs**: the corpus starts 2025-11 and those papers cite mostly older work
-that is not indexed. Twelve queries is noise. The miner is kept in
-`src/data/citation_eval.py` — it would work on a corpus with historical depth.
+**Citation contexts — abandoned.** Mine "...following [23]..." from full text, resolve the
+reference, use the sentence as the query. Yielded **12 usable pairs**: the corpus starts
+2025-11 and those papers cite older work that is not indexed. The miner is kept in
+`src/data/citation_eval.py`; it needs a corpus with historical depth.
 
-**Passage-to-paper retrieval — what is actually reported.** Take a sentence from a
-paper's body, use it as the query, gold is that paper. Labels are free and exact. The
-chunk the sentence came from is **held out**, so the system must identify the paper from
-its *other* passages — without that, BM25 matches itself verbatim and everything
-saturates at nDCG 0.99.
+**Sentence benchmark.** A verbatim sentence from a paper's body is the query; gold is that
+paper; the chunk it came from is held out. Free exact labels, but the query is literal text
+from the target.
 
-300 queries, source chunk held out, paper-level scoring (`results/ml_metrics.json`):
+**Generated benchmark.** A model reads the paper and writes the question a researcher would
+type to find it (`scripts/generate_eval_queries.py`). The label stays *structural* - the
+question came from that paper - so the model generates the query, never the verdict. The
+prompt forbids reusing the title and a 4-gram check rejects anything that does anyway.
+
+150 queries each (`results/ml_metrics.json`):
+
+### Sentence benchmark — favours lexical matching by construction
 
 | Setup | nDCG@10 | Recall@10 | MAP@10 |
 |---|---|---|---|
-| **BM25 only** | **0.8948** | 0.9300 | **0.8832** |
-| Dense only (bge-small) | 0.5205 | 0.6300 | 0.4864 |
-| BM25 + dense (RRF) | 0.7719 | **0.9367** | 0.7196 |
-| + cross-encoder reranker | 0.8637 | 0.9133 | 0.8477 |
+| **BM25 only** | **0.8929** | 0.9267 | **0.8821** |
+| Dense only (bge-small) | 0.5146 | 0.6333 | 0.4778 |
+| BM25 + dense (RRF) | 0.7698 | **0.9333** | 0.7171 |
+| + cross-encoder reranker | 0.8773 | 0.9267 | 0.8615 |
 
-### The uncomfortable result
+### Generated benchmark — natural-language queries
 
-**BM25 alone beats the full pipeline on this benchmark.** RRF *hurts* precision
-(0.7719 vs 0.8948) because it weights a strong arm and a weak one equally, and the
-reranker only partly recovers the loss.
+| Setup | nDCG@10 | Recall@10 | MAP@10 |
+|---|---|---|---|
+| BM25 only | 0.9951 | 1.0000 | 0.9933 |
+| Dense only (bge-small) | 0.9582 | 0.9933 | 0.9465 |
+| BM25 + dense (RRF) | 0.9836 | 1.0000 | 0.9780 |
+| + cross-encoder reranker | 0.9864 | 1.0000 | 0.9821 |
 
-But look at Recall@10: **RRF is the best row (0.9367)**. Fusion finds papers BM25 misses;
-it just buries them below rank 1. Dense retrieval is contributing recall and costing
-precision, and equal-weight RRF is the wrong trade for this workload.
+### Generated + pooled LLM judgements — secondary, synthetic
 
-### What this does and does not prove
+Top-10 of every configuration pooled and judged by a model, recovering the false negatives
+that one-gold-per-query causes. An LLM's opinion, so it is never the headline.
 
-It **does** mean the current fusion weighting is miscalibrated for this corpus, and that
-is worth fixing — weighted RRF favouring the lexical arm is the obvious next step.
+| Setup | nDCG@10 | Recall@10 | MAP@10 |
+|---|---|---|---|
+| BM25 only | 0.9581 | 0.9650 | 0.9373 |
+| Dense only (bge-small) | 0.9317 | 0.9594 | 0.9065 |
+| BM25 + dense (RRF) | 0.9567 | 0.9744 | 0.9360 |
+| **+ cross-encoder reranker** | **0.9612** | **0.9800** | **0.9403** |
 
-It does **not** prove dense retrieval is useless here. The queries are verbatim sentences
-from the target paper, which favours lexical matching even with the source chunk removed,
-because a paper's other passages share its vocabulary. Real Find-papers queries are short
-natural-language topics, where the balance should shift toward dense. Measuring *that*
-needs the hand-labelled tier-2 set, which does not exist yet.
+### What these actually say
 
-Absolute numbers here are optimistic and should not be compared to SciFact or published
-BEIR results. The comparison between rows is the informative part.
+**BM25's dominance was an artifact of the sentence benchmark.** On the sentence set it
+beats the full pipeline by 0.016 nDCG@10 and destroys dense retrieval (0.89 vs 0.51). On
+natural-language queries that collapses: dense goes from **0.5146 to 0.9582**, and the four
+configurations land within 0.04 of each other. The earlier conclusion that "the fusion
+weighting is miscalibrated" does not survive contact with realistic queries.
+
+**Under the most realistic conditions the full pipeline wins.** With pooled judgements -
+natural queries, and credit for every relevant paper rather than only the source - the
+reranker is top on nDCG@10 *and* Recall@10. That is the first setting in which the
+architecture justifies itself.
+
+**But the margin is 0.003 over BM25, on 150 queries, with no significance test.** Treat it
+as "no longer losing", not as "wins". A paired bootstrap would almost certainly straddle
+zero.
+
+### The generated benchmark is saturated, and that is a flaw
+
+Every configuration scores **0.958 or above**. A benchmark where everything is nearly
+perfect cannot rank anything. The cause is the prompt: asking for 8-20 words describing
+"the problem and the approach" produces a compressed abstract, and finding the source paper
+among 8,330 from a compressed abstract is easy.
+
+Real queries are shorter, vaguer and more ambiguous - "world models for robotics", not
+"how to ground latent dynamics predictions with physical state supervision for control".
+Discriminating between these configurations needs harder queries: fewer words, no method
+description, deliberate ambiguity. That is the next iteration, and until it exists none of
+the differences above should be treated as established.
 
 ---
 
