@@ -35,13 +35,14 @@ limited to whatever was ingested.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Any
 
 from src.api.llm import explain_paper, generate_answer, is_configured
 from src.config import device
-from src.data.arxiv_source import Paper, read_papers
+from src.data.arxiv_source import Paper, fetch_metadata, read_papers
 from src.data.chunking import chunk_paper, chunks_to_corpus, read_chunks
 from src.data.citation import resolve
 from src.retrieval.bm25 import BM25Retriever
@@ -50,6 +51,12 @@ from src.retrieval.diversify import cap_per_paper, distinct_papers
 from src.retrieval.fusion import reciprocal_rank_fusion
 
 PSEUDO_QID = "q"
+
+_QUERY_STOPWORDS = {
+    "the", "and", "for", "with", "from", "what", "how", "why", "does", "explain",
+    "when", "are", "was", "that", "this", "there", "which", "about", "into",
+    "some", "can", "you", "its", "their", "using", "used", "based",
+}
 
 
 class MLPipeline:
@@ -238,6 +245,68 @@ class MLPipeline:
             "timing_ms": {"total": round((time.perf_counter() - start) * 1000.0, 1)},
         }
 
+    def _rescore_live(
+        self, question: str, live: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Score live arXiv abstracts with the same reranker the corpus uses.
+
+        arXiv's own relevance ranking is lexical and generous. Running the
+        cross-encoder over the abstracts puts live results on the same scale as
+        corpus results, so one confidence threshold governs both.
+        """
+        pairs = [(question, f"{p['title']} {p['text']}".strip()) for p in live]
+        if not pairs:
+            return []
+        with self._gpu_lock:
+            scores = self.reranker.score(pairs)
+        for passage, score in zip(live, scores):
+            passage["score"] = float(score)
+        return sorted(live, key=lambda p: p["score"], reverse=True)
+
+    # ------------------------------------------------------- live arxiv search
+
+    def search_arxiv_live(self, question: str, top_k: int = 6) -> list[dict[str, Any]]:
+        """Search arXiv directly, for questions the local corpus cannot answer.
+
+        The corpus is a sample, not coverage: ~1,400 papers per category across
+        nine months, against the 50-150/day arXiv actually publishes. Most
+        papers a user asks about were never ingested, and telling them "not in
+        this corpus" is honest but useless when the paper plainly exists.
+
+        Abstracts only - no PDF fetch - so this stays a couple of seconds.
+        """
+        terms = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", question)
+                 if w.lower() not in _QUERY_STOPWORDS][:12]
+        if not terms:
+            return []
+        try:
+            found = fetch_metadata(
+                "all:" + " AND ".join(f'"{t}"' for t in terms[:4]),
+                max_results=top_k,
+                sort_by_relevance=True,
+            )
+            if not found:
+                found = fetch_metadata(
+                    "all:" + " ".join(terms[:8]), max_results=top_k, sort_by_relevance=True
+                )
+        except Exception:  # noqa: BLE001 - a failed fallback is not a failed request
+            return []
+
+        return [
+            {
+                "chunk_id": f"live:{p.paper_id}",
+                "doc_id": f"live:{p.paper_id}",
+                "paper_id": p.paper_id,
+                "arxiv_url": f"https://arxiv.org/abs/{p.paper_id}",
+                "score": 1.0,
+                "title": p.title,
+                "section": "abstract",
+                "published": p.published,
+                "text": p.abstract,
+            }
+            for p in found
+        ]
+
     # ------------------------------------------------------------------- ask
 
     def answer(self, question: str, generate: bool = True) -> dict[str, Any]:
@@ -249,14 +318,58 @@ class MLPipeline:
         ac = self.cfg["answer"]
         best, mean_top, confident = self._confidence([p["score"] for p in passages])
 
+        # Blend in live arXiv results when the corpus alone is thin.
+        #
+        # The corpus is a sample (~1,400 papers per category against the 50-150
+        # a day arXiv publishes), so a question can be perfectly answerable from
+        # the literature and unanswerable from here. Two triggers:
+        #
+        #   below min_mean_score   the corpus has nothing - live results replace
+        #   below enrich_below     the corpus has something thin - live results
+        #                          are added, so the answer draws on both
+        #
+        # A strong corpus hit skips the network entirely and stays sub-second.
         answer_text: str | None = None
         generation_ms = 0.0
-        if not confident:
+        source = "corpus"
+        remote_ok = self.cfg["citation"].get("allow_remote", True)
+        enrich_below = ac.get("enrich_below", 0.0)
+
+        if remote_ok and (not confident or mean_top < enrich_below):
+            live = self.search_arxiv_live(question)
+            if live:
+                # arXiv always returns *something*, so live results must clear
+                # the same confidence bar as the corpus. Without this the
+                # honest "I do not know" is replaced by confident nonsense -
+                # a sourdough question came back with quantum-physics papers.
+                # Filter live results PER PASSAGE, not on their mean.
+                #
+                # The mean-of-top-5 rule works for the corpus because a query
+                # that belongs to it matches many passages. An arXiv keyword
+                # search returns a mixed bag by construction - three loose hits
+                # would drag the mean under and bury the one paper that is
+                # actually the answer. So each live passage clears its own bar.
+                live = self._rescore_live(question, live)
+                floor = ac.get("live_min_score", 0.30)
+                live = [p for p in live if p["score"] >= floor]
+                seen = {p["paper_id"] for p in passages}
+                extra = [p for p in live if p["paper_id"] not in seen]
+                if confident and extra:
+                    passages = passages + extra          # enrich
+                    source = "corpus+arxiv_live"
+                elif extra:
+                    passages = extra                     # replace
+                    source = "arxiv_live"
+                    confident = True
+                    mean_top = sum(p["score"] for p in extra) / len(extra)
+                elif not confident:
+                    passages = []                        # genuinely unanswerable
+
+        if not passages:
             answer_text = (
-                f"Nothing in this corpus answers that. The top passages averaged "
-                f"{mean_top:.3f}, below the {ac['min_mean_score']:.2f} threshold, which "
-                "usually means the topic is outside the ingested slice of arXiv rather "
-                "than absent from the literature. The closest matches are below."
+                "Nothing answers that - not in the local corpus, and not in a live "
+                "arXiv search either. If this is an AI/ML topic the paper may simply "
+                "be too new or too obscure; if it is not, this tool only covers arXiv."
             )
         elif generate:
             gen_start = time.perf_counter()
@@ -269,6 +382,7 @@ class MLPipeline:
             "question": question,
             "answer": answer_text,
             "confident": confident,
+            "source": source,
             "top_score": round(best, 3),
             "mean_top_score": round(mean_top, 3),
             "citations": passages,

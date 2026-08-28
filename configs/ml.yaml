@@ -72,6 +72,15 @@ answer:
   # Measured: in-corpus mean5 0.67-0.996, out-of-corpus 0.001-0.19.
   confidence_top_n: 5
   min_mean_score: 0.35
+  # Below this (but above min_mean_score) the corpus has *something* but not
+  # much, so live arXiv results are added alongside it and the answer draws on
+  # both. Above it, a strong corpus hit answers without touching the network.
+  # Costs ~3s when it fires. Set to 0.0 to disable enrichment entirely.
+  enrich_below: 0.80
+  # Live arXiv results are filtered per passage, not on their mean: a keyword
+  # search returns a mixed bag, so a few loose hits must not bury the one paper
+  # that is the answer. Each live passage must clear this on its own.
+  live_min_score: 0.30
   # Groq: free tier, OpenAI-compatible. Model ids change as Groq rotates its
   # catalogue - if you get a decommissioned-model error, change this line.
   # gpt-oss models are REASONING models: hidden reasoning counts against
