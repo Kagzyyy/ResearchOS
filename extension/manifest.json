@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "ResearchOS — explain this citation",
+  "version": "1.0.0",
+  "description": "Select a citation in any paper and get it identified and explained, without leaving the page.",
+  "permissions": ["contextMenus", "storage", "activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "ResearchOS" },
+  "commands": {
+    "explain-selection": {
+      "suggested_key": { "default": "Alt+Shift+E" },
+      "description": "Explain the selected citation"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

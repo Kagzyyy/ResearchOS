@@ -37,3 +37,6 @@ web/node_modules/
 web/.next/
 web/out/
 web/.env.local
+
+# Uploaded PDFs and their extracted chunks
+cache/uploads/

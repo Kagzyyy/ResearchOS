@@ -108,6 +108,44 @@ the differences above should be treated as established.
 
 ---
 
+## For daily use
+
+### Start everything
+
+```
+start.cmd
+```
+
+Backend on :8100, web app on :3000. The backend needs 2-3 minutes to load its
+models on a cold start; the UI says "Backend not reachable" until then, which is
+expected rather than broken.
+
+### Check it works
+
+```bash
+python scripts/healthcheck.py
+```
+
+Thirteen checks against the live HTTP endpoints - retrieval, the live arXiv
+fallback, honest refusal, both citation formats, question routing, PDF upload,
+document QA, generation, feedback, and whether the server logged any errors.
+Exits non-zero on any failure, so it can gate a deploy.
+
+### The browser extension
+
+`extension/` — load it unpacked at `chrome://extensions` (Developer mode → Load
+unpacked). Select a citation on any page and press **Alt+Shift+E**, or
+right-click → *Explain with ResearchOS*. A panel opens in place with the paper
+identified and explained.
+
+This is the feature worth having. Everything else asks you to leave the paper
+you are reading; this one does not.
+
+Set the backend URL and access token in the extension popup. It talks to the
+same `/explain` endpoint the web app uses, so nothing in the backend changes.
+
+---
+
 ## Quick start
 
 ```bash

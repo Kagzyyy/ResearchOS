@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ResearchOS</title>
+<style>
+  body {
+    width: 300px; margin: 0; padding: 16px;
+    background: #0f1720; color: #e6edf1;
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 14px; margin: 0 0 4px; }
+  .sub { color: #8b9aa6; margin: 0 0 16px; font-size: 12px; }
+  label { display: block; font-size: 11px; color: #8b9aa6; margin: 12px 0 5px; letter-spacing: .04em; text-transform: uppercase; }
+  input {
+    width: 100%; box-sizing: border-box; padding: 7px 9px;
+    background: #0b1116; color: #e6edf1;
+    border: 1px solid #223140; border-radius: 5px; font: inherit;
+  }
+  input:focus { outline: none; border-color: #4fbfc8; }
+  button {
+    width: 100%; margin-top: 14px; padding: 8px;
+    background: #4fbfc8; color: #04212a; border: 0; border-radius: 5px;
+    font: 600 13px inherit; cursor: pointer;
+  }
+  button:hover { background: #7fdde4; }
+  .status { margin-top: 12px; font-size: 12px; min-height: 17px; }
+  .ok { color: #74d99f; } .bad { color: #ffb4a2; }
+  .tip { margin-top: 16px; padding-top: 12px; border-top: 1px solid #223140; color: #8b9aa6; font-size: 12px; }
+  kbd { background: #1a2632; border: 1px solid #2c3d4d; border-radius: 3px; padding: 1px 5px; font-size: 11px; }
+</style>
+
+<h1>⎎ ResearchOS</h1>
+<p class="sub">Select a citation, then right-click or press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>.</p>
+
+<label for="base">Backend URL</label>
+<input id="base" placeholder="http://127.0.0.1:8100">
+
+<label for="token">Access token (optional)</label>
+<input id="token" type="password" placeholder="leave blank if none">
+
+<button id="save">Save &amp; test connection</button>
+<p class="status" id="status"></p>
+
+<p class="tip">Works on arXiv, journal pages, and any PDF your browser renders as text.</p>
+
+<script src="popup.js"></script>

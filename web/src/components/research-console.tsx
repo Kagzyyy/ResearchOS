@@ -8,6 +8,9 @@ import {
   Layers,
   Loader2,
   Search,
+  Check,
+  Clock,
+  Copy,
   Sparkles,
   ThumbsDown,
   Paperclip,
@@ -32,6 +35,13 @@ import {
   type Passage,
 } from "@/lib/api";
 import BoxLoader from "@/components/ui/box-loader";
+import {
+  addHistory,
+  clearHistory,
+  readHistory,
+  relativeTime,
+  type HistoryEntry,
+} from "@/lib/history";
 
 type Mode = "papers" | "explain";
 
@@ -62,6 +72,11 @@ export function ResearchConsole() {
   const [doc, setDoc] = useState<UploadedDoc | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+
+  useEffect(() => {
+    setHistory(readHistory());
+  }, []);
 
   useEffect(() => {
     health().then(setStatus).catch(() => setStatus(null));
@@ -81,17 +96,23 @@ export function ResearchConsole() {
     setLoading(true);
     clear();
     try {
+      let summary = "";
       if (mode === "papers") {
-        setPapersResult(await findPapers(text));
+        const res = await findPapers(text);
+        setPapersResult(res);
+        summary = `${res.papers.length} papers`;
       } else {
         const res = await explain(text, doc?.document_id);
         if (res.resolved) {
           setExplainResult(res);
+          summary = res.paper?.title ?? "explained";
         } else {
-          // Not a citation — treat it as a question about the corpus instead.
-          setAskResult(await ask(text));
+          const answered = await ask(text);
+          setAskResult(answered);
+          summary = `${answered.distinct_papers} papers`;
         }
       }
+      setHistory(addHistory({ query: text, mode, summary }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -249,6 +270,40 @@ export function ResearchConsole() {
         ))}
       </div>
 
+      {history.length > 0 && !loading && (
+        <div className="mt-6 border-t border-white/5 pt-4">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="inline-flex items-center gap-1.5 text-xs tracking-wider text-slate-500 uppercase">
+              <Clock size={12} /> Recent
+            </span>
+            <button
+              onClick={() => setHistory(clearHistory())}
+              className="text-xs text-slate-600 transition hover:text-slate-400"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {history.slice(0, 8).map((h) => (
+              <button
+                key={h.id}
+                onClick={() => {
+                  setMode(h.mode);
+                  run(h.query);
+                }}
+                title={`${h.summary ?? ""} · ${relativeTime(h.at)}`}
+                className="group inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/5 bg-white/[0.02] px-2.5 py-1 text-xs text-slate-400 transition hover:border-white/20 hover:text-slate-200"
+              >
+                <span className="shrink-0 text-[10px] text-slate-600 uppercase">
+                  {h.mode === "papers" ? "find" : "explain"}
+                </span>
+                <span className="truncate">{h.query.slice(0, 46)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {loading && (
         <div className="mt-10 flex flex-col items-center gap-6 py-10">
           <BoxLoader />
@@ -391,6 +446,38 @@ function FeedbackBar({ queryId }: { queryId: number | null }) {
         </div>
       )}
     </div>
+  );
+}
+
+function CopyAnswer({ text, cites }: { text: string; cites: { paper_id: string; title: string; arxiv_url: string }[] }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    // Citations are appended as real references - an answer pasted into notes
+    // is worthless if the [2312.00752] tags lead nowhere.
+    const seen = new Set<string>();
+    const refs = cites
+      .filter((c) => c.paper_id && !seen.has(c.paper_id) && seen.add(c.paper_id))
+      .map((c) => `[${c.paper_id}] ${c.title}${c.arxiv_url ? ` — ${c.arxiv_url}` : ""}`)
+      .join("\n");
+    try {
+      const payload = refs ? `${text}\n\nReferences\n${refs}` : text;
+      await navigator.clipboard.writeText(payload);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard blocked - the text is still on screen */
+    }
+  }
+
+  return (
+    <button
+      onClick={copy}
+      className="inline-flex items-center gap-1.5 text-xs text-slate-500 transition hover:text-slate-300"
+    >
+      {copied ? <Check size={13} /> : <Copy size={13} />}
+      {copied ? "Copied with references" : "Copy answer"}
+    </button>
   );
 }
 
@@ -565,6 +652,9 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
       {result.explanation && (
         <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
           <Prose text={result.explanation} />
+          <div className="mt-4 border-t border-white/10 pt-3">
+            <CopyAnswer text={result.explanation} cites={[...result.passages, ...result.related]} />
+          </div>
         </article>
       )}
 
@@ -590,6 +680,9 @@ function AskView({ result, queryId }: { result: AskResult; queryId: number | nul
       {result.answer && (
         <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
           <Prose text={result.answer} />
+          <div className="mt-4 border-t border-white/10 pt-3">
+            <CopyAnswer text={result.answer} cites={result.citations} />
+          </div>
         </article>
       )}
       <Meta
