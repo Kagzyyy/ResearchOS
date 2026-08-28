@@ -409,7 +409,13 @@ function Meta({ items }: { items: string[] }) {
 function PapersView({ result, queryId }: { result: PapersResult; queryId: number | null }) {
   return (
     <div className="mt-8 space-y-6">
-      {!result.confident && (
+      {result.source === "arxiv_live" && (
+        <Callout tone="amber" title="Not in the local corpus — fetched live from arXiv">
+          The indexed sample does not cover this topic, so these came straight from the
+          arXiv API. Abstracts only, so no full-text passages.
+        </Callout>
+      )}
+      {!result.confident && result.source !== "arxiv_live" && (
         <Callout tone="amber" title="Outside this corpus">
           Top matches averaged {result.mean_top_score.toFixed(3)}. Results are shown but
           are probably unrelated to what you asked.
@@ -481,6 +487,11 @@ function PaperCard({
             {paper.has_full_text && (
               <span className="inline-flex items-center gap-1 text-slate-600">
                 <FileText size={11} /> full text
+              </span>
+            )}
+            {paper.from_arxiv && (
+              <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-sky-300">
+                live from arXiv
               </span>
             )}
           </span>

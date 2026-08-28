@@ -236,8 +236,54 @@ class MLPipeline:
 
         scores = [p["score"] for p in papers]
         best_score, mean_top, confident = self._confidence(scores)
+
+        # Same live fallback the ask path has. Without it, Find papers is
+        # limited to the ingested sample - and the corpus holds roughly 1,400
+        # papers per category against the 50-150/day arXiv publishes, so a
+        # topic can be well covered on arXiv and absent here. Searching "economic
+        # world models" returned unrelated robotics papers for exactly this
+        # reason while the paper sat on arXiv.
+        source = "corpus"
+        ac = self.cfg["answer"]
+        if not confident and self.cfg["citation"].get("allow_remote", True):
+            live = self.search_arxiv_live(topic, top_k=top_k)
+            if live:
+                live = self._rescore_live(topic, live)
+                floor = ac.get("live_min_score", 0.30)
+                kept = [p for p in live if p["score"] >= floor]
+                if kept:
+                    seen = {p["paper_id"] for p in papers}
+                    fetched = [
+                        {
+                            "paper_id": p["paper_id"],
+                            "doc_id": p["doc_id"],
+                            "title": p["title"],
+                            "authors": [],
+                            "abstract": p["text"],
+                            "published": p["published"],
+                            "primary_category": "",
+                            "arxiv_url": p["arxiv_url"],
+                            "score": round(p["score"], 4),
+                            "matched_passages": 1,
+                            "matched_sections": ["abstract"],
+                            "why": p["text"][:400],
+                            "why_section": "abstract",
+                            "has_full_text": False,
+                            "from_arxiv": True,
+                        }
+                        for p in kept
+                        if p["paper_id"] not in seen
+                    ]
+                    if fetched:
+                        papers = (fetched + papers)[:top_k]
+                        source = "arxiv_live"
+                        confident = True
+                        mean_top = sum(p["score"] for p in fetched) / len(fetched)
+                        best_score = max(p["score"] for p in fetched)
+
         return {
             "topic": topic,
+            "source": source,
             "papers": papers,
             "confident": confident,
             "top_score": round(best_score, 3),

@@ -50,6 +50,7 @@ export interface PaperMeta {
   primary_category: string;
   arxiv_url: string;
   has_full_text: boolean;
+  from_arxiv?: boolean;
 }
 
 export interface ExplainResult {
@@ -83,11 +84,13 @@ export interface PaperHit {
   why: string;
   why_section: string;
   has_full_text: boolean;
+  from_arxiv?: boolean;
 }
 
 export interface PapersResult {
   query_id: number;
   topic: string;
+  source?: string;
   papers: PaperHit[];
   confident: boolean;
   top_score: number;
