@@ -19,10 +19,11 @@ Vercel talks to it over the network.
   Vercel  ── your Next.js front end (static, no secrets)
         │  HTTPS
         ▼
-  tunnel or VPS  ── FastAPI + BM25 + FAISS + reranker + your Groq key
+  Hugging Face Space  ── FastAPI + BM25 + FAISS + reranker + your Groq key
 ```
 
-Everything expensive stays on your machine. Vercel only serves the interface.
+Vercel serves the interface; the Space does the work. Neither depends on your
+laptop being on.
 
 ---
 
@@ -74,8 +75,6 @@ the image and the indices ship with the repo, so waking is seconds, not the
 three minutes a cold rebuild would cost.
 
 ### Tunnel to your machine — fastest to set up, laptop must stay on
-
-### Tunnel (free, works today, laptop must stay on)
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8100
