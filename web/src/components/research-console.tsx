@@ -78,6 +78,21 @@ export function ResearchConsole() {
     setHistory(readHistory());
   }, []);
 
+  // The extension hands off here when it cannot draw a panel on the page -
+  // Chrome blocks content scripts inside its PDF viewer, which is exactly
+  // where papers get read. ?explain=... runs the query on arrival.
+  useEffect(() => {
+    const handoff = new URLSearchParams(window.location.search).get("explain");
+    if (!handoff) return;
+    setMode("explain");
+    setInput(handoff);
+    // Clear the parameter so a refresh does not silently re-run it.
+    window.history.replaceState({}, "", window.location.pathname);
+    document.getElementById("console")?.scrollIntoView({ behavior: "smooth" });
+    void run(handoff);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     health().then(setStatus).catch(() => setStatus(null));
   }, []);

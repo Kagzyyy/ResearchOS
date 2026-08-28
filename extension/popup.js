@@ -1,15 +1,17 @@
-const DEFAULTS = { apiBase: "http://127.0.0.1:8100", apiToken: "" };
+const DEFAULTS = { apiBase: "http://127.0.0.1:8100", apiToken: "", webApp: "http://localhost:3000" };
 const $ = (id) => document.getElementById(id);
 
 chrome.storage.sync.get(DEFAULTS).then((s) => {
   $("base").value = s.apiBase;
   $("token").value = s.apiToken;
+  $("webapp").value = s.webApp;
 });
 
 $("save").addEventListener("click", async () => {
   const apiBase = ($("base").value || DEFAULTS.apiBase).replace(/\/+$/, "");
   const apiToken = $("token").value.trim();
-  await chrome.storage.sync.set({ apiBase, apiToken });
+  const webApp = ($("webapp").value || DEFAULTS.webApp).replace(/\/+$/, "");
+  await chrome.storage.sync.set({ apiBase, apiToken, webApp });
 
   const status = $("status");
   status.textContent = "Testing…";

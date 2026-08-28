@@ -37,9 +37,13 @@
 <label for="token">Access token (optional)</label>
 <input id="token" type="password" placeholder="leave blank if none">
 
+<label for="webapp">Web app URL</label>
+<input id="webapp" placeholder="http://localhost:3000">
+
 <button id="save">Save &amp; test connection</button>
 <p class="status" id="status"></p>
 
-<p class="tip">Works on arXiv, journal pages, and any PDF your browser renders as text.</p>
+<p class="tip">On web pages the answer opens in a panel. On PDFs — where Chrome
+blocks extensions from drawing — it opens in the web app instead.</p>
 
 <script src="popup.js"></script>

@@ -15,12 +15,38 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+/** Send to the in-page panel; report whether it was actually received.
+ *
+ *  Chrome does not inject content scripts into its built-in PDF viewer, and
+ *  papers are mostly read as PDFs. Without this check the panel silently never
+ *  appears on exactly the pages the extension exists for.
+ */
+async function tell(tabId, message) {
+  try {
+    await chrome.tabs.sendMessage(tabId, message);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Fallback when no panel can be injected: hand the query to the web app. */
+async function openInWebApp(query) {
+  const { webApp } = { webApp: "http://localhost:3000", ...(await chrome.storage.sync.get({ webApp: "http://localhost:3000" })) };
+  await chrome.tabs.create({ url: `${webApp}/?explain=${encodeURIComponent(query)}` });
+}
+
 async function explain(tabId, text) {
   const trimmed = (text || "").trim();
   if (trimmed.length < 3) return;
 
   // Show the panel immediately so the wait is visible, not silent.
-  chrome.tabs.sendMessage(tabId, { type: "researchos:loading", query: trimmed });
+  const reachable = await tell(tabId, { type: "researchos:loading", query: trimmed });
+  if (!reachable) {
+    // A PDF viewer, a chrome:// page, or a tab loaded before install.
+    await openInWebApp(trimmed);
+    return;
+  }
 
   const { apiBase, apiToken } = await settings();
   const headers = { "Content-Type": "application/json" };
@@ -42,10 +68,10 @@ async function explain(tabId, text) {
             : `Request failed (${res.status}). ${detail.slice(0, 160)}`,
       );
     }
-    chrome.tabs.sendMessage(tabId, { type: "researchos:result", data: await res.json() });
+    await tell(tabId, { type: "researchos:result", data: await res.json() });
   } catch (err) {
     const offline = String(err).includes("Failed to fetch");
-    chrome.tabs.sendMessage(tabId, {
+    await tell(tabId, {
       type: "researchos:error",
       message: offline
         ? "Cannot reach ResearchOS. Is the backend running on port 8100?"
