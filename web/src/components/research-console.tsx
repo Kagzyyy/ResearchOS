@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   BookOpen,
@@ -10,6 +10,8 @@ import {
   Search,
   Sparkles,
   ThumbsDown,
+  Paperclip,
+  X,
   ThumbsUp,
   TriangleAlert,
 } from "lucide-react";
@@ -19,7 +21,9 @@ import {
   findPapers,
   health,
   logClick,
+  uploadPdf,
   vote,
+  type UploadedDoc,
   type AskResult,
   type ExplainResult,
   type Health,
@@ -27,6 +31,7 @@ import {
   type PapersResult,
   type Passage,
 } from "@/lib/api";
+import BoxLoader from "@/components/ui/box-loader";
 
 type Mode = "papers" | "explain";
 
@@ -54,6 +59,9 @@ export function ResearchConsole() {
   const [explainResult, setExplainResult] = useState<ExplainResult | null>(null);
   const [askResult, setAskResult] = useState<AskResult | null>(null);
   const [status, setStatus] = useState<Health | null>(null);
+  const [doc, setDoc] = useState<UploadedDoc | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     health().then(setStatus).catch(() => setStatus(null));
@@ -76,7 +84,7 @@ export function ResearchConsole() {
       if (mode === "papers") {
         setPapersResult(await findPapers(text));
       } else {
-        const res = await explain(text);
+        const res = await explain(text, doc?.document_id);
         if (res.resolved) {
           setExplainResult(res);
         } else {
@@ -88,6 +96,23 @@ export function ResearchConsole() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleFile(file: File | undefined) {
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const uploaded = await uploadPdf(file);
+      setDoc(uploaded);
+      setMode("explain");
+      clear();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
   }
 
@@ -147,25 +172,73 @@ export function ResearchConsole() {
           placeholder={
             mode === "papers"
               ? "A topic, e.g. world models for robot manipulation…"
-              : "Paste a reference, an arXiv id, or ask about a concept…"
+              : doc
+                ? `Ask anything about "${doc.title.slice(0, 48)}"…`
+                : "Paste a reference, an arXiv id, or ask about a concept…"
           }
           className="w-full resize-none bg-transparent px-2 py-1 text-[15px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
         />
+        {mode === "explain" && doc && (
+          <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs">
+            <Paperclip size={13} className="shrink-0 text-sky-300" />
+            <span className="min-w-0 flex-1 truncate text-sky-100">
+              Asking about <span className="font-medium">{doc.title}</span>
+            </span>
+            <span className="shrink-0 text-sky-400/70">
+              {doc.n_chunks} passages · {doc.n_words.toLocaleString()} words
+            </span>
+            <button
+              onClick={() => setDoc(null)}
+              className="shrink-0 rounded p-0.5 text-sky-300 transition hover:bg-white/10 hover:text-white"
+              aria-label="Stop using this document"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between px-2 pt-2">
-          <span className="text-xs text-slate-500">Enter to run · Shift+Enter for newline</span>
+          <div className="flex items-center gap-3">
+            {mode === "explain" && (
+              <>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="hidden"
+                  onChange={(e) => handleFile(e.target.files?.[0])}
+                />
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading}
+                  className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-slate-200 disabled:opacity-50"
+                >
+                  {uploading ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Paperclip size={13} />
+                  )}
+                  {uploading ? "Reading PDF…" : doc ? "Replace PDF" : "Attach a PDF"}
+                </button>
+              </>
+            )}
+            <span className="text-xs text-slate-500">Enter to run · Shift+Enter for newline</span>
+          </div>
           <button
             onClick={() => run()}
             disabled={loading || input.trim().length < 3}
             className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {loading ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
-            {mode === "papers" ? "Find papers" : "Explain"}
+            <Search size={15} />
+            {mode === "papers" ? "Find papers" : doc ? "Ask this paper" : "Explain"}
           </button>
         </div>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        {EXAMPLES[mode].map((ex) => (
+        {(mode === "explain" && doc
+          ? ["What problem does this solve?", "Explain the method in simple terms", "What are the limitations?"]
+          : EXAMPLES[mode]
+        ).map((ex) => (
           <button
             key={ex}
             onClick={() => run(ex)}
@@ -176,15 +249,28 @@ export function ResearchConsole() {
         ))}
       </div>
 
+      {loading && (
+        <div className="mt-10 flex flex-col items-center gap-6 py-10">
+          <BoxLoader />
+          <p className="text-sm text-slate-400">
+            {mode === "papers"
+              ? "Searching 40,379 passages…"
+              : doc
+                ? `Reading ${doc.title.slice(0, 40)}…`
+                : "Retrieving, reranking, then writing an answer…"}
+          </p>
+        </div>
+      )}
+
       {error && (
         <Callout tone="red" title="Request failed">
           {error}
         </Callout>
       )}
 
-      {papersResult && <PapersView result={papersResult} queryId={queryId} />}
-      {explainResult && <ExplainView result={explainResult} queryId={queryId} />}
-      {askResult && <AskView result={askResult} queryId={queryId} />}
+      {!loading && papersResult && <PapersView result={papersResult} queryId={queryId} />}
+      {!loading && explainResult && <ExplainView result={explainResult} queryId={queryId} />}
+      {!loading && askResult && <AskView result={askResult} queryId={queryId} />}
     </section>
   );
 }

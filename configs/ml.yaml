@@ -117,3 +117,4 @@ paths:
   text_cache: cache/arxiv/text
   index_cache: cache/ml
   feedback_db: results/ml_feedback.db
+  upload_dir: cache/uploads

@@ -127,8 +127,39 @@ export const findPapers = (topic: string, topK = 10) =>
 export const ask = (query: string, topK = 6) =>
   post<AskResult>("/ask", { query, top_k: topK, generate: true });
 
-export const explain = (citation: string) =>
-  post<ExplainResult>("/explain", { citation, generate: true });
+export const explain = (citation: string, documentId?: string | null) =>
+  post<ExplainResult>("/explain", {
+    citation,
+    generate: true,
+    document_id: documentId ?? null,
+  });
+
+export interface UploadedDoc {
+  document_id: string;
+  title: string;
+  n_chunks: number;
+  n_words: number;
+  filename: string;
+}
+
+/** Upload a PDF. Multipart, so it does not go through post()/JSON headers. */
+export async function uploadPdf(file: File): Promise<UploadedDoc> {
+  const body = new FormData();
+  body.append("file", file);
+  const auth: Record<string, string> = {};
+  if (API_TOKEN) auth["Authorization"] = `Bearer ${API_TOKEN}`;
+  const res = await fetch(`${API_BASE}/upload`, { method: "POST", headers: auth, body });
+  if (!res.ok) {
+    let detail = await res.text().catch(() => "");
+    try {
+      detail = JSON.parse(detail).detail ?? detail;
+    } catch {
+      /* plain-text body */
+    }
+    throw new Error(detail || `Upload failed (${res.status})`);
+  }
+  return res.json() as Promise<UploadedDoc>;
+}
 
 export const logClick = (queryId: number, docId: string) =>
   post<{ logged: boolean }>("/feedback/click", { query_id: queryId, doc_id: docId });

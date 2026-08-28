@@ -179,6 +179,28 @@ The explanation comes back in four parts — *What it is · The idea · Why it g
 In simpler terms* — plus the paper's own passages and **what other papers in the corpus
 say about it**, which is where the wider context comes from.
 
+### Ask your own PDF
+
+Attach a paper in the Explain tab and every question is answered from that
+document instead of the corpus.
+
+Uploads are **not** added to the index. Rebuilding BM25 and FAISS over 40,000
+chunks to accommodate one 30-chunk document would take minutes and be thrown
+away; instead the cross-encoder scores every chunk of the paper directly. A
+paper is only 20-40 chunks, so exhaustive scoring is both cheaper than
+re-indexing and strictly better than retrieval, which could only approximate it.
+
+Titles come from **font size**, not content. Content heuristics lose to licence
+blocks - "Attention Is All You Need" opens with a multi-line Google permission
+notice, so both "first substantial line" and keyword filtering name the paper
+after the legal text. The title is the largest horizontal text on page 1 in
+every paper format. Rotated spans are skipped, because arXiv stamps the id down
+the left margin in a larger font than anything else on the page.
+
+Limits: 25 MB, text-based PDFs only (a scan is rejected with an explanation
+rather than silently producing nothing), 200 documents kept, content-addressed
+so re-uploading the same file is free.
+
 ---
 
 ## Architecture

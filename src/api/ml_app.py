@@ -20,7 +20,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -29,6 +29,7 @@ from src.api.db import FeedbackLog
 from src.api.llm import is_configured
 from src.api.ml_pipeline import MLPipeline
 from src.api.security import allowed_origins, api_token, guard, rate_limit_per_minute
+from src.api.uploads import UploadError, UploadStore
 from src.config import load_config
 
 CONFIG_PATH = os.environ.get("RESEARCHOS_ML_CONFIG", "configs/ml.yaml")
@@ -42,6 +43,7 @@ async def lifespan(_app: FastAPI):
     state["cfg"] = cfg
     state["pipeline"] = MLPipeline(cfg)
     state["log"] = FeedbackLog(cfg["paths"]["feedback_db"])
+    state["uploads"] = UploadStore(cfg["paths"].get("upload_dir", "cache/uploads"))
     yield
     state.clear()
 
@@ -77,6 +79,9 @@ class PapersRequest(BaseModel):
 class ExplainRequest(BaseModel):
     citation: str = Field(min_length=3, max_length=2000)
     generate: bool = True
+    # When set, the question is answered against this uploaded PDF instead of
+    # the corpus.
+    document_id: str | None = Field(default=None, max_length=64)
 
 
 class ClickRequest(BaseModel):
@@ -178,6 +183,39 @@ def explain(request: ExplainRequest) -> dict[str, Any]:
     """Resolve a citation to its paper and explain it in plain terms."""
     pipeline: MLPipeline = state["pipeline"]
     log: FeedbackLog = state["log"]
+    if request.document_id:
+        store: UploadStore = state["uploads"]
+        meta = store.get_meta(request.document_id)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="That document is no longer stored.")
+        answer = pipeline.answer_from_document(
+            request.citation, store.passages(request.document_id), meta.title,
+            generate=request.generate,
+        )
+        query_id = log.log_query(
+            query=request.citation, answer=answer["answer"],
+            latency_ms=answer["timing_ms"]["total"],
+            backend="groq" if answer["generation_configured"] else "retrieval-only",
+            citations=answer["citations"], mode="upload",
+            confident=True, top_score=answer["top_score"],
+            mean_top_score=answer["mean_top_score"],
+            generated=bool(answer["answer"]) and answer["generation_configured"],
+        )
+        return {
+            "query_id": query_id, "citation": request.citation, "resolved": True,
+            "method": "uploaded_document", "query_used": request.citation,
+            "candidates": [], "from_corpus": False,
+            "paper": {
+                "paper_id": meta.document_id, "title": meta.title, "abstract": "",
+                "authors": [], "published": "", "primary_category": "your upload",
+                "arxiv_url": "", "has_full_text": True,
+            },
+            "explanation": answer["answer"], "passages": answer["citations"],
+            "related": [], "source": "upload",
+            "generation_configured": answer["generation_configured"],
+            "timing_ms": answer["timing_ms"],
+        }
+
     result = pipeline.explain_citation(request.citation, generate=request.generate)
     query_id = log.log_query(
         query=request.citation,
@@ -190,6 +228,18 @@ def explain(request: ExplainRequest) -> dict[str, Any]:
         generated=bool(result.get("explanation")) and result["generation_configured"],
     )
     return {"query_id": query_id, **result}
+
+
+@app.post("/upload")
+async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Upload a PDF, then ask questions about it via /explain?document_id=..."""
+    store: UploadStore = state["uploads"]
+    try:
+        data = await file.read()
+        meta = store.add(data, file.filename or "upload.pdf")
+    except UploadError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return meta.to_public()
 
 
 @app.post("/feedback/click")

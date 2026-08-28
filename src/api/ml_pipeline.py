@@ -263,6 +263,74 @@ class MLPipeline:
             passage["score"] = float(score)
         return sorted(live, key=lambda p: p["score"], reverse=True)
 
+    def answer_from_document(
+        self, question: str, passages: list[dict[str, Any]], title: str, generate: bool = True
+    ) -> dict[str, Any]:
+        """Answer a question against a single uploaded paper.
+
+        Every chunk of the document is scored directly by the cross-encoder -
+        no BM25, no embeddings, no index. A paper is only 20-40 chunks, so
+        exhaustive scoring is both cheap and strictly better than retrieval,
+        which can only approximate it.
+        """
+        start = time.perf_counter()
+        if not passages:
+            return {
+                "question": question,
+                "answer": "That document has no readable passages.",
+                "confident": False,
+                "source": "upload",
+                "top_score": 0.0,
+                "mean_top_score": 0.0,
+                "citations": [],
+                "distinct_papers": 0,
+                "generation_configured": is_configured(),
+                "timing_ms": {"retrieval_and_rerank": 0.0, "generation": 0.0, "total": 0.0},
+            }
+
+        pairs = [(question, f"{p['title']} {p['text']}".strip()) for p in passages]
+        with self._gpu_lock:
+            scores = self.reranker.score(pairs)
+        for passage, score in zip(passages, scores):
+            passage["score"] = float(score)
+        ranked = sorted(passages, key=lambda p: p["score"], reverse=True)
+
+        ac = self.cfg["answer"]
+        top = ranked[: ac["top_k_passages"]]
+        best, mean_top, _ = self._confidence([p["score"] for p in top])
+        retrieval_ms = (time.perf_counter() - start) * 1000.0
+
+        answer_text: str | None = None
+        generation_ms = 0.0
+        if generate:
+            gen_start = time.perf_counter()
+            answer_text = generate_answer(
+                f"About the paper '{title}': {question}",
+                top,
+                model=ac["model"],
+                max_tokens=ac["max_tokens"],
+            )
+            generation_ms = (time.perf_counter() - gen_start) * 1000.0
+
+        return {
+            "question": question,
+            "answer": answer_text,
+            # The user chose this document, so we answer from it even when the
+            # match is weak - declining would be second-guessing them.
+            "confident": True,
+            "source": "upload",
+            "top_score": round(best, 3),
+            "mean_top_score": round(mean_top, 3),
+            "citations": top,
+            "distinct_papers": 1,
+            "generation_configured": is_configured(),
+            "timing_ms": {
+                "retrieval_and_rerank": round(retrieval_ms, 1),
+                "generation": round(generation_ms, 1),
+                "total": round(retrieval_ms + generation_ms, 1),
+            },
+        }
+
     # ------------------------------------------------------- live arxiv search
 
     def search_arxiv_live(self, question: str, top_k: int = 6) -> list[dict[str, Any]]:

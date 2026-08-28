@@ -24,3 +24,82 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ── Isometric box loader ────────────────────────────────────────────────
+   The component ships only markup; all geometry lives here. Sized in a single
+   --size variable so it can be scaled from one place, and coloured from the
+   app's sky palette rather than the reference blue so it matches the console.
+   Honours prefers-reduced-motion. */
+
+.boxes {
+  --size: 24px;
+  --duration: 800ms;
+  height: calc(var(--size) * 2);
+  width: calc(var(--size) * 3);
+  position: relative;
+  transform-style: preserve-3d;
+  transform-origin: 50% 50%;
+  transform: rotateX(60deg) rotateZ(45deg) rotateY(0deg) translateZ(0px);
+}
+
+.boxes .box {
+  width: var(--size);
+  height: var(--size);
+  top: 0;
+  left: 0;
+  position: absolute;
+  transform-style: preserve-3d;
+}
+
+.boxes .box-1 { transform: translate(100%, 0);   animation: box1 var(--duration) linear infinite; }
+.boxes .box-2 { transform: translate(0, 100%);   animation: box2 var(--duration) linear infinite; }
+.boxes .box-3 { transform: translate(100%, 100%); animation: box3 var(--duration) linear infinite; }
+.boxes .box-4 { transform: translate(200%, 0);   animation: box4 var(--duration) linear infinite; }
+
+.boxes .box .face {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: #38bdf8;               /* sky-400 */
+  backface-visibility: visible;
+}
+
+.boxes .box .face-front {
+  background: #7dd3fc;               /* sky-300 - lit face */
+  transform: translateZ(calc(var(--size) / 2));
+}
+.boxes .box .face-right {
+  background: #0ea5e9;               /* sky-500 */
+  transform: rotateY(90deg) translateZ(calc(var(--size) / 2));
+}
+.boxes .box .face-top {
+  background: #bae6fd;               /* sky-200 - top catches most light */
+  transform: rotateX(90deg) translateZ(calc(var(--size) / 2));
+}
+.boxes .box .face-back {
+  background: #0369a1;               /* sky-700 */
+  transform: translateZ(calc(var(--size) / -2)) rotateY(180deg);
+}
+
+@keyframes box1 {
+  0%, 50% { transform: translate(100%, 0); }
+  100%    { transform: translate(200%, 0); }
+}
+@keyframes box2 {
+  0%   { transform: translate(0, 100%); }
+  50%  { transform: translate(0, 0); }
+  100% { transform: translate(100%, 0); }
+}
+@keyframes box3 {
+  0%, 50% { transform: translate(100%, 100%); }
+  100%    { transform: translate(0, 100%); }
+}
+@keyframes box4 {
+  0%   { transform: translate(200%, 0); }
+  50%  { transform: translate(200%, 100%); }
+  100% { transform: translate(100%, 100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boxes .box { animation: none; }
+}
