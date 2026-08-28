@@ -22,6 +22,13 @@ from pathlib import Path
 
 import arxiv
 
+# arXiv rate-limits hard (HTTP 429) and the client library retries internally
+# with multi-second sleeps, so one unlucky interactive query could block for a
+# minute and then fail. A small in-process cache makes repeated lookups free,
+# which matters because the same paper gets asked about repeatedly.
+_SEARCH_CACHE: dict[str, list["Paper"]] = {}
+_SEARCH_CACHE_MAX = 512
+
 # "http://arxiv.org/abs/2401.12345v3" -> ("2401.12345", 3)
 _ENTRY_RE = re.compile(r"/abs/(?P<id>[^v]+(?:v\d+)?)")
 _VERSION_RE = re.compile(r"^(?P<base>.+?)v(?P<version>\d+)$")
@@ -70,6 +77,8 @@ def fetch_metadata(
     page_size: int = 100,
     delay_seconds: float = 3.0,
     sort_by_relevance: bool = False,
+    num_retries: int = 1,
+    use_cache: bool = False,
 ) -> list[Paper]:
     """Run one arXiv API query and return papers.
 
@@ -78,7 +87,13 @@ def fetch_metadata(
     whose titles match, so a foundational paper like "Attention Is All You Need"
     is buried under every recent paper that echoes its title.
     """
-    client = arxiv.Client(page_size=page_size, delay_seconds=delay_seconds, num_retries=3)
+    cache_key = f"{query}|{max_results}|{sort_by_relevance}"
+    if use_cache and cache_key in _SEARCH_CACHE:
+        return _SEARCH_CACHE[cache_key]
+
+    client = arxiv.Client(
+        page_size=page_size, delay_seconds=delay_seconds, num_retries=num_retries
+    )
     search = arxiv.Search(
         query=query,
         max_results=max_results,
@@ -107,6 +122,10 @@ def fetch_metadata(
             )
         )
     print(f"[arxiv] {len(papers):>5} results for: {query[:80]}")
+    if use_cache:
+        if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+            _SEARCH_CACHE.clear()
+        _SEARCH_CACHE[cache_key] = papers
     return papers
 
 

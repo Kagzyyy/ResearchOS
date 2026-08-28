@@ -80,14 +80,23 @@ def _sanitise(text: str, limit: int = 4000) -> str:
     return cleaned[:limit].strip()
 
 
-def build_passages_block(passages: list[dict[str, Any]]) -> str:
-    """Render retrieved passages as delimited, sanitised, untrusted data."""
+def build_passages_block(
+    passages: list[dict[str, Any]], max_passages: int = 6, max_chars: int = 900
+) -> str:
+    """Render retrieved passages as delimited, sanitised, untrusted data.
+
+    Bounded on purpose. Groq's free tier allows 8,000 tokens per minute across
+    every request; sending 12 full passages plus a 2,000-token answer budget
+    spends 6,000 of that in one call, so the second question of the minute is
+    rate-limited. Six passages at 900 characters keeps a request near 2,500
+    tokens, which leaves room for roughly three questions a minute.
+    """
     blocks = []
-    for p in passages:
+    for p in passages[:max_passages]:
         pid = _sanitise(str(p.get("paper_id") or p.get("doc_id", "?")), 40)
         title = _sanitise(p.get("title", ""), 300)
         section = _sanitise(p.get("section", ""), 60)
-        body = _sanitise(p.get("text", ""))
+        body = _sanitise(p.get("text", ""), max_chars)
         blocks.append(
             f'<passage id="{pid}" title="{title}" section="{section}">\n{body}\n</passage>'
         )
@@ -139,7 +148,11 @@ def _complete(
             )
             if attempt == retries - 1 or not transient:
                 raise
-            time.sleep(min(30.0, 2.0 * (2**attempt)) + random.random())
+            # Groq states exactly how long to wait ("try again in 28.13s").
+            # Guessing shorter than that guarantees the retry fails too.
+            hinted = re.search(r"try again in ([0-9.]+)s", message)
+            delay = float(hinted.group(1)) + 1.0 if hinted else min(30.0, 2.0 * (2**attempt))
+            time.sleep(delay + random.random())
     else:  # pragma: no cover - loop always breaks or raises
         raise last or RuntimeError("completion failed")
 

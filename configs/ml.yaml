@@ -87,8 +87,13 @@ answer:
   # max_tokens, so the budget must be generous or content comes back empty.
   # Groq rotates its catalogue - llama-3.3-70b-versatile was decommissioned.
   # List what you actually have: Groq().models.list()
-  model: openai/gpt-oss-120b
-  max_tokens: 2500
+  # gpt-oss models are REASONING models: hidden reasoning counts against
+  # max_tokens, so the budget must be generous or content comes back empty.
+  # 20b is ~2x faster than 120b at similar answer quality for this task; swap
+  # to openai/gpt-oss-120b if you would rather have depth than speed.
+  # Groq rotates its catalogue - list what you have: Groq().models.list()
+  model: openai/gpt-oss-20b
+  max_tokens: 1300
 
 # Citation lookup: paste a reference you saw in a paper, get it explained.
 citation:
@@ -98,7 +103,7 @@ citation:
   # unresolved paper, which grows without bound on a shared deployment.
   # Extracted text is kept regardless - it is ~1% of the size.
   max_pdf_cache_gb: 5.0
-  max_tokens: 3000
+  max_tokens: 1500
 
 server:
   host: 127.0.0.1

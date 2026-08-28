@@ -44,7 +44,7 @@ from src.api.llm import explain_paper, generate_answer, is_configured
 from src.config import device
 from src.data.arxiv_source import Paper, fetch_metadata, read_papers
 from src.data.chunking import chunk_paper, chunks_to_corpus, read_chunks
-from src.data.citation import resolve
+from src.data.citation import looks_like_a_question, resolve
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.dense import DenseRetriever
 from src.retrieval.diversify import cap_per_paper, distinct_papers
@@ -438,6 +438,28 @@ class MLPipeline:
         half of the answer comes from.
         """
         start = time.perf_counter()
+
+        # A question is not a citation. Trying to resolve one costs two arXiv
+        # searches that cannot succeed, and arXiv answers 429 - which is how a
+        # concept question turned into a minute of waiting and then a failure.
+        if looks_like_a_question(citation):
+            answer = self.answer(citation, generate=generate)
+            return {
+                "citation": citation,
+                "resolved": False,
+                "method": "question",
+                "query_used": citation,
+                "candidates": [],
+                "paper": None,
+                "explanation": answer["answer"],
+                "passages": answer["citations"],
+                "related": [],
+                "answered_as_question": True,
+                "source": answer["source"],
+                "generation_configured": is_configured(),
+                "timing_ms": answer["timing_ms"],
+            }
+
         resolution = resolve(
             citation,
             self.papers_by_id,

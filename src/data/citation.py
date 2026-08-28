@@ -39,6 +39,23 @@ AUTHOR_ETAL_RE = re.compile(
 QUOTED_RE = re.compile(r"[\"“‘']([^\"”’']{12,})[\"”’']")
 
 
+def _safe_fetch(query: str, max_results: int) -> list[Paper]:
+    """An arXiv lookup that never takes down the request.
+
+    Interactive lookups use a 1s delay and a single retry - the 3s/3-retry
+    defaults are for bulk ingestion and turn one 429 into a minute of blocking.
+    A rate-limited search returns nothing and the caller degrades.
+    """
+    try:
+        return fetch_metadata(
+            query, max_results=max_results, delay_seconds=1.0,
+            sort_by_relevance=True, num_retries=1, use_cache=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[arxiv] lookup failed ({type(exc).__name__}); degrading")
+        return []
+
+
 @dataclass
 class Resolution:
     """What a citation string resolved to, and how."""
@@ -48,6 +65,35 @@ class Resolution:
     query_used: str
     from_corpus: bool
     candidates: list[dict[str, str]]
+
+
+QUESTION_STARTS = (
+    "what", "how", "why", "when", "where", "which", "who", "explain", "describe",
+    "compare", "does", "do ", "is ", "are ", "can ", "should", "tell me", "give me",
+)
+
+
+def looks_like_a_question(text: str) -> bool:
+    """True when the input is a question, not a reference.
+
+    Worth checking before anything else: resolving a question as if it were a
+    paper title costs two arXiv searches that cannot succeed, and arXiv rate
+    limits at 429 with multi-second retries. A user typing "explain how context
+    is found in LLMs" waited a minute for two doomed lookups and then an error.
+    """
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return False
+    if extract_arxiv_id(lowered):
+        return False                       # an id is never a question
+    if lowered.endswith("?"):
+        return True
+    if lowered.startswith(QUESTION_STARTS):
+        return True
+    # Reference-shaped: a bracketed marker, "et al.", or a year in parentheses.
+    if REF_MARKER_RE.match(text) or "et al" in lowered or re.search(r"\((?:19|20)\d{2}\)", text):
+        return False
+    return False
 
 
 def extract_arxiv_id(text: str) -> str | None:
@@ -176,7 +222,7 @@ def resolve(
         if local:
             return Resolution(Paper(**local), "arxiv_id", arxiv_id, True, [])
         if allow_remote:
-            found = fetch_metadata(f"id:{arxiv_id}", max_results=1, sort_by_relevance=True)
+            found = _safe_fetch(f"id:{arxiv_id}", 1)
             if found:
                 paper = found[0]
                 if fetch_full_text:
@@ -192,9 +238,9 @@ def resolve(
     # --- 3. ask arXiv ---
     if allow_remote and title_query:
         escaped = title_query.replace('"', "").strip()
-        found = fetch_metadata(f'ti:"{escaped}"', max_results=8, sort_by_relevance=True)
+        found = _safe_fetch(f'ti:"{escaped}"', 8)
         if not found:
-            found = fetch_metadata(f"all:{escaped}", max_results=8, sort_by_relevance=True)
+            found = _safe_fetch(f"all:{escaped}", 8)
         if found:
             best = max(found, key=lambda p: _token_overlap(title_query, p.title))
             if _token_overlap(title_query, best.title) >= 0.4:
