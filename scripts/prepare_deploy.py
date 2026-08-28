@@ -98,13 +98,38 @@ def main() -> None:
         print(f"[deploy] indices  {mb(index_bytes)}" if index_bytes
               else "[deploy] indices  none found; run a query locally to build them first")
 
-    total = after + chunk_bytes + index_bytes
-    print(f"\n[deploy] total    {mb(total)} in {out}/")
-    if total > 400e6:
-        print("[deploy] over 400 MB - push with git-lfs, and expect a slow first upload")
-    print("\nNext: copy deploy/data and deploy/cache into your Space repo alongside")
-    print("Dockerfile.space (renamed to Dockerfile), src/, configs/ and scripts/.")
-    print("See DEPLOY.md for the full sequence.")
+    # --- everything else the Space needs, so deploy/ is pushable as-is ------
+    for name in ("src", "configs", "scripts"):
+        copy_tree(Path(name), out / name)
+    shutil.copy("requirements.txt", out / "requirements.txt")
+    shutil.copy("Dockerfile.space", out / "Dockerfile")
+    shutil.copy("spaces/README.md", out / "README.md")
+
+    # Spaces rejects files over 10 MB outside LFS; data and indices are far over.
+    (out / ".gitattributes").write_text(
+        "data/*.jsonl filter=lfs diff=lfs merge=lfs -text\n"
+        "cache/ml/** filter=lfs diff=lfs merge=lfs -text\n",
+        encoding="utf-8",
+    )
+    # A stray .env copied into a public Space would publish the Groq key.
+    (out / ".gitignore").write_text(".env\n__pycache__/\n*.pyc\nresults/\n", encoding="utf-8")
+    for junk in list(out.rglob("__pycache__")):
+        shutil.rmtree(junk, ignore_errors=True)
+    for stray in out.rglob(".env"):
+        stray.unlink(missing_ok=True)
+
+    total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
+    print(f"\n[deploy] {out}/ is a complete Space repo - {mb(total)}")
+    print("[deploy] Dockerfile, README.md, requirements.txt, src/, configs/,")
+    print("[deploy] scripts/, data/, cache/, .gitattributes, .gitignore")
+    print("\nPush it:")
+    print(f"  cd {out}")
+    print("  git init -b main && git lfs install")
+    print('  git add -A && git commit -m "ResearchOS backend"')
+    print("  git remote add origin https://huggingface.co/spaces/USER/SPACE")
+    print("  git push -u origin main")
+    print("\nThen set GROQ_API_KEY and RESEARCHOS_ALLOWED_ORIGINS in Space settings.")
+    print("Full sequence in DEPLOY.md.")
 
 
 if __name__ == "__main__":
