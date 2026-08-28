@@ -1,0 +1,55 @@
+# ResearchOS backend for Hugging Face Spaces (free CPU tier).
+#
+# Rename to `Dockerfile` in the Space repo — Spaces looks for that exact name.
+#
+# The free tier gives 16 GB RAM and 2 vCPU, which is enough: the models need
+# about 2.1 GB. The constraint is the 2 vCPU, so configs/ml.cpu.yaml halves the
+# candidate set the cross-encoder has to read.
+#
+# Free Spaces sleep when idle and wake on the next request. Model weights are
+# baked into the image and the indices ship with the repo, so a wake is seconds
+# rather than the three minutes a cold rebuild would take.
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    RESEARCHOS_ML_CONFIG=configs/ml.cpu.yaml \
+    # Spaces runs as a non-root user; HF_HOME must be somewhere writable or the
+    # transformers cache fails at import time with a permission error.
+    HF_HOME=/home/user/.cache/huggingface \
+    TORCH_HOME=/home/user/.cache/torch
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 user
+USER user
+ENV PATH=/home/user/.local/bin:$PATH
+WORKDIR /home/user/app
+
+COPY --chown=user requirements.txt .
+RUN pip install --no-cache-dir --user torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir --user -r requirements.txt
+
+# Bake the weights so a cold wake does not also mean a 500 MB download.
+RUN python -c "\
+from sentence_transformers import SentenceTransformer, CrossEncoder; \
+SentenceTransformer('BAAI/bge-small-en-v1.5'); \
+CrossEncoder('BAAI/bge-reranker-base', num_labels=1)"
+
+COPY --chown=user src/ ./src/
+COPY --chown=user configs/ ./configs/
+COPY --chown=user scripts/ ./scripts/
+
+# Produced by scripts/prepare_deploy.py — slimmed papers, chunks, prebuilt indices.
+COPY --chown=user data/ ./data/
+COPY --chown=user cache/ ./cache/
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:7860/health || exit 1
+
+CMD ["uvicorn", "src.api.ml_app:app", "--host", "0.0.0.0", "--port", "7860"]

@@ -40,3 +40,6 @@ web/.env.local
 
 # Uploaded PDFs and their extracted chunks
 cache/uploads/
+
+# Output of scripts/prepare_deploy.py
+deploy/

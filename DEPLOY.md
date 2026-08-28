@@ -28,7 +28,52 @@ Everything expensive stays on your machine. Vercel only serves the interface.
 
 ## 1. Give the backend a public HTTPS address
 
-Two options.
+Three options, in the order I would try them.
+
+### Hugging Face Spaces — free, permanent, no card (recommended)
+
+The only free tier that actually fits: 16 GB RAM, 2 vCPU, a persistent process,
+Docker, and a permanent HTTPS URL. The models need ~2.1 GB, so there is room.
+
+```bash
+python scripts/prepare_deploy.py
+```
+
+That writes `deploy/` — the papers file slimmed from 86 MB to 16 MB by dropping
+full text the chunks already hold, plus the chunks and the prebuilt indices.
+About 182 MB total.
+
+Then create a **Docker** Space at huggingface.co/new-space and push:
+
+```
+Dockerfile          <- Dockerfile.space, renamed
+README.md           <- spaces/README.md (the YAML header is required)
+src/  configs/  scripts/  requirements.txt
+data/  cache/       <- from deploy/
+```
+
+`data/` and `cache/` are over 10 MB, so `git lfs track "data/*.jsonl" "cache/**"`
+before committing them.
+
+Set under **Settings → Variables and secrets**:
+
+| Name | Kind |
+|---|---|
+| `GROQ_API_KEY` | secret |
+| `RESEARCHOS_ALLOWED_ORIGINS` | variable — your Vercel origin |
+| `RESEARCHOS_API_TOKEN` | secret, optional |
+
+Your backend is then `https://<user>-<space>.hf.space`, permanently, whether or
+not your laptop is on.
+
+**The tradeoff is speed.** Two vCPU instead of a 4060 means the cross-encoder
+takes seconds rather than milliseconds — `configs/ml.cpu.yaml` halves the
+candidate set to compensate, and the Space uses it automatically. Expect a few
+seconds per query. Free Spaces also sleep when idle; the weights are baked into
+the image and the indices ship with the repo, so waking is seconds, not the
+three minutes a cold rebuild would cost.
+
+### Tunnel to your machine — fastest to set up, laptop must stay on
 
 ### Tunnel (free, works today, laptop must stay on)
 
@@ -46,7 +91,7 @@ Cloudflare account keeps a stable hostname.
 **It only works while your machine is awake and the tunnel is running.** When
 the laptop sleeps, the site shows "waiting for the backend" to everyone.
 
-### Small server (permanent, slower)
+### Small server — permanent, you pay
 
 `Dockerfile.ml` builds a CPU-only image. Any VPS with 4 GB RAM will run it.
 Reranking is roughly ten times slower without the GPU — acceptable, not
