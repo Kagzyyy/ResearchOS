@@ -162,6 +162,7 @@ def resolve(
     fetch_full_text: bool = True,
     pdf_dir: str = "cache/arxiv/pdf",
     text_dir: str = "cache/arxiv/text",
+    max_cache_gb: float = 5.0,
 ) -> Resolution:
     """Turn a citation string into a Paper. Local corpus first, then arXiv."""
     raw = (citation or "").strip()
@@ -179,7 +180,7 @@ def resolve(
             if found:
                 paper = found[0]
                 if fetch_full_text:
-                    _attach_text(paper, pdf_dir, text_dir)
+                    _attach_text(paper, pdf_dir, text_dir, max_cache_gb)
                 return Resolution(paper, "arxiv_id", arxiv_id, False, [])
 
     # --- 2. title match against the local corpus ---
@@ -198,7 +199,7 @@ def resolve(
             best = max(found, key=lambda p: _token_overlap(title_query, p.title))
             if _token_overlap(title_query, best.title) >= 0.4:
                 if fetch_full_text:
-                    _attach_text(best, pdf_dir, text_dir)
+                    _attach_text(best, pdf_dir, text_dir, max_cache_gb)
                 return Resolution(best, "arxiv_search", title_query, False, candidates)
             candidates = [
                 {"paper_id": p.paper_id, "title": p.title, "score": f"{_token_overlap(title_query, p.title):.2f}"}
@@ -208,9 +209,9 @@ def resolve(
     return Resolution(None, "unresolved", title_query, False, candidates[:5])
 
 
-def _attach_text(paper: Paper, pdf_dir: str, text_dir: str) -> None:
+def _attach_text(paper: Paper, pdf_dir: str, text_dir: str, max_cache_gb: float = 5.0) -> None:
     """Best-effort full text for an on-demand paper. Abstract-only is acceptable."""
-    pdf = download_pdf(paper, pdf_dir)
+    pdf = download_pdf(paper, pdf_dir, max_cache_gb=max_cache_gb)
     if pdf is not None:
         text = extract_text(pdf, text_dir)
         if text and len(text.split()) > 200:

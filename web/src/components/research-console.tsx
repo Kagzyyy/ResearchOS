@@ -9,6 +9,8 @@ import {
   Loader2,
   Search,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   TriangleAlert,
 } from "lucide-react";
 import {
@@ -17,6 +19,7 @@ import {
   findPapers,
   health,
   logClick,
+  vote,
   type AskResult,
   type ExplainResult,
   type Health,
@@ -237,6 +240,74 @@ function Callout({
   );
 }
 
+/** Explicit thumbs up/down. The scarcest and most useful signal - you cannot
+ *  collect it retroactively, which is why it ships with the first version. */
+function FeedbackBar({ queryId }: { queryId: number | null }) {
+  const [sent, setSent] = useState<null | boolean>(null);
+  const [comment, setComment] = useState("");
+  const [showComment, setShowComment] = useState(false);
+
+  if (queryId === null) return null;
+
+  function send(helpful: boolean, text?: string) {
+    setSent(helpful);
+    vote(queryId as number, helpful, text).catch(() => {});
+  }
+
+  if (sent !== null && !showComment) {
+    return (
+      <p className="text-xs text-slate-500">
+        Thanks — logged as {sent ? "helpful" : "not helpful"}.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500">Was this useful?</span>
+        <button
+          onClick={() => send(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-emerald-500/40 hover:text-emerald-300"
+        >
+          <ThumbsUp size={13} /> Yes
+        </button>
+        <button
+          onClick={() => setShowComment(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-red-500/40 hover:text-red-300"
+        >
+          <ThumbsDown size={13} /> No
+        </button>
+      </div>
+      {showComment && (
+        <div className="flex gap-2">
+          <input
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                send(false, comment);
+                setShowComment(false);
+              }
+            }}
+            placeholder="What was wrong? (optional)"
+            className="flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-slate-200 placeholder:text-slate-600 focus:border-white/25 focus:outline-none"
+          />
+          <button
+            onClick={() => {
+              send(false, comment);
+              setShowComment(false);
+            }}
+            className="rounded-lg bg-white/10 px-3 py-1.5 text-xs text-slate-200 transition hover:bg-white/20"
+          >
+            Send
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Meta({ items }: { items: string[] }) {
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
@@ -270,6 +341,7 @@ function PapersView({ result, queryId }: { result: PapersResult; queryId: number
           <PaperCard key={p.paper_id} paper={p} rank={i + 1} queryId={queryId} />
         ))}
       </div>
+      <FeedbackBar queryId={queryId} />
     </div>
   );
 }
@@ -407,6 +479,7 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
           queryId={queryId}
         />
       )}
+      <FeedbackBar queryId={queryId} />
     </div>
   );
 }
@@ -430,6 +503,7 @@ function AskView({ result, queryId }: { result: AskResult; queryId: number | nul
         ]}
       />
       <PassageList title="Sources" passages={result.citations} queryId={queryId} />
+      <FeedbackBar queryId={queryId} />
     </div>
   );
 }

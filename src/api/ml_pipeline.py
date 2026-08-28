@@ -331,6 +331,7 @@ class MLPipeline:
             fetch_full_text=self.cfg["citation"]["fetch_full_text"],
             pdf_dir=self.cfg["paths"]["pdf_cache"],
             text_dir=self.cfg["paths"]["text_cache"],
+            max_cache_gb=self.cfg["citation"].get("max_pdf_cache_gb", 5.0),
         )
 
         if resolution.paper is None:

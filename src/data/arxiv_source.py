@@ -123,12 +123,49 @@ def dedup_by_version(papers: list[Paper]) -> list[Paper]:
     return list(best.values())
 
 
-def download_pdf(paper: Paper, pdf_dir: str | Path, delay_seconds: float = 1.0) -> Path | None:
+def prune_pdf_cache(pdf_dir: str | Path, max_gb: float) -> int:
+    """Keep the PDF cache under `max_gb`, deleting least-recently-used first.
+
+    Citation lookup downloads a PDF per unresolved paper, so on a shared
+    deployment this directory grows without bound. Extracted text is kept - it
+    is ~1% of the size and is what retrieval actually uses, so evicting a PDF
+    costs nothing unless the same paper is re-parsed.
+    """
+    directory = Path(pdf_dir)
+    if not directory.exists() or max_gb <= 0:
+        return 0
+    files = sorted(directory.glob("*.pdf"), key=lambda f: f.stat().st_atime)
+    total = sum(f.stat().st_size for f in files)
+    budget = max_gb * 1e9
+    removed = 0
+    for path in files:
+        if total <= budget:
+            break
+        size = path.stat().st_size
+        try:
+            path.unlink()
+            total -= size
+            removed += 1
+        except OSError:
+            continue
+    if removed:
+        print(f"[arxiv] pruned {removed} cached PDFs, cache now {total / 1e9:.1f} GB")
+    return removed
+
+
+def download_pdf(
+    paper: Paper,
+    pdf_dir: str | Path,
+    delay_seconds: float = 1.0,
+    max_cache_gb: float = 0.0,
+) -> Path | None:
     """Fetch a PDF, reusing the cached copy when present. Returns None on failure."""
     target = Path(pdf_dir) / f"{paper.versioned_id}.pdf"
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and target.stat().st_size > 0:
         return target
+    if max_cache_gb > 0:
+        prune_pdf_cache(pdf_dir, max_cache_gb)
 
     try:
         import requests

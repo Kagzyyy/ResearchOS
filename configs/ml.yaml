@@ -85,6 +85,10 @@ answer:
 citation:
   allow_remote: true        # fall back to the arXiv API when not in the corpus
   fetch_full_text: true     # download the PDF for on-demand papers
+  # Cap the on-demand PDF cache. Citation lookup downloads one PDF per
+  # unresolved paper, which grows without bound on a shared deployment.
+  # Extracted text is kept regardless - it is ~1% of the size.
+  max_pdf_cache_gb: 5.0
   max_tokens: 3000
 
 server:

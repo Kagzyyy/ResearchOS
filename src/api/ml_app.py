@@ -20,7 +20,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from src.api.db import FeedbackLog
 from src.api.llm import is_configured
 from src.api.ml_pipeline import MLPipeline
+from src.api.security import allowed_origins, api_token, guard, rate_limit_per_minute
 from src.config import load_config
 
 CONFIG_PATH = os.environ.get("RESEARCHOS_ML_CONFIG", "configs/ml.yaml")
@@ -50,11 +51,12 @@ app = FastAPI(
     description="Search, explain and de-reference AI research papers.",
     version="1.0.0",
     lifespan=lifespan,
+    dependencies=[Depends(guard)],
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins=allowed_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -114,6 +116,8 @@ def health() -> dict[str, Any]:
         "reranker_model": cfg.get("reranker", {}).get("model"),
         "llm_model": cfg.get("answer", {}).get("model"),
         "generation_enabled": is_configured(),
+        "auth_required": api_token() is not None,
+        "rate_limit_per_minute": rate_limit_per_minute(),
     }
 
 

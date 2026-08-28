@@ -3,6 +3,19 @@
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8100";
 
+/**
+ * Shared access token. Inlined into the client bundle, so it is a deterrent
+ * against drive-by abuse of your Groq quota, not a secret. Anyone who can load
+ * the page can read it. Do not use it to protect anything that matters.
+ */
+const API_TOKEN = process.env.NEXT_PUBLIC_API_TOKEN ?? "";
+
+function headers(): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (API_TOKEN) h["Authorization"] = `Bearer ${API_TOKEN}`;
+  return h;
+}
+
 export interface Passage {
   chunk_id: string;
   doc_id: string;
@@ -89,16 +102,21 @@ export interface Health {
   reranker_model: string | null;
   llm_model: string | null;
   generation_enabled: boolean;
+  auth_required?: boolean;
+  rate_limit_per_minute?: number;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: headers(),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`${path} failed: ${res.status} ${await res.text().catch(() => "")}`);
+    const detail = await res.text().catch(() => "");
+    if (res.status === 429) throw new Error("Rate limited — wait a minute and try again.");
+    if (res.status === 401) throw new Error("Access token rejected. Check NEXT_PUBLIC_API_TOKEN.");
+    throw new Error(`${path} failed: ${res.status} ${detail}`);
   }
   return res.json() as Promise<T>;
 }
@@ -115,8 +133,15 @@ export const explain = (citation: string) =>
 export const logClick = (queryId: number, docId: string) =>
   post<{ logged: boolean }>("/feedback/click", { query_id: queryId, doc_id: docId });
 
+export const vote = (queryId: number, helpful: boolean, comment?: string) =>
+  post<{ logged: boolean }>("/feedback/vote", {
+    query_id: queryId,
+    helpful,
+    comment: comment ?? null,
+  });
+
 export async function health(): Promise<Health> {
-  const res = await fetch(`${API_BASE}/health`);
+  const res = await fetch(`${API_BASE}/health`, { headers: headers() });
   if (!res.ok) throw new Error(`health failed: ${res.status}`);
   return res.json();
 }

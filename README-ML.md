@@ -363,18 +363,46 @@ cd web && npm run build && node .next/standalone/server.js
 the backend URL changes. It is a public value; never put a secret in a `NEXT_PUBLIC_*`
 variable, they ship to the browser.
 
+### Access control
+
+Set these on the backend before exposing it to anyone:
+
+| Variable | Effect |
+|---|---|
+| `RESEARCHOS_API_TOKEN` | When set, every endpoint except `/health` requires `Authorization: Bearer <token>`. Verified: no token and wrong token both return **401**. |
+| `RESEARCHOS_ALLOWED_ORIGINS` | Comma-separated CORS origins. Defaults to `localhost:3000` — set it to your real frontend origin or the browser blocks every call. |
+| `RESEARCHOS_RATE_LIMIT` | Requests/minute per client IP, default 20. Verified: the 6th request in a 5/min window returns **429** with `Retry-After`. |
+
+The frontend passes the token via `NEXT_PUBLIC_API_TOKEN`. That is **inlined into
+the browser bundle** — it deters drive-by abuse of your Groq quota, it does not
+protect anything. Anyone who loads the page can read it. Never put a real secret
+in a `NEXT_PUBLIC_*` variable.
+
+The rate limiter is in-process: it resets on restart and does not coordinate
+across replicas. With one process serving a few people, that is what is wanted.
+
 ### Secrets
 
-`GROQ_API_KEY` is read from the environment, or from `.env` (gitignored). It is never
-baked into an image or a bundle. On Windows, write `.env` as **UTF-8** — PowerShell's
-`>` redirection produces UTF-16, which the loader now survives but warns about.
+`GROQ_API_KEY` is read from the environment or from `.env` (gitignored). It is
+never baked into an image or a bundle. On Windows write `.env` as **UTF-8** —
+PowerShell's `>` redirection produces UTF-16, which the loader survives with a
+warning but should not have to.
 
-### What this is not
+### Disk
 
-Single-node, single-process, no queue, no autoscaling, no auth, no rate limiting. It
-holds the whole index in memory (~2 GB) and rebuilds it from scratch rather than
-incrementally. That is adequate for one user or a small team and would not survive
-public traffic.
+The on-demand PDF cache is capped by `citation.max_pdf_cache_gb` (default 5 GB)
+and evicts least-recently-used files. Extracted text is kept regardless — it is
+~1% of the size and is what retrieval actually uses.
+
+### Watching it fail
+
+```bash
+python scripts/review_failures.py --config configs/ml.yaml
+```
+
+Errors, downvotes, out-of-corpus queries (with their most common terms, as ingest
+candidates), confident-but-never-clicked results, and the slowest requests. Run it
+weekly once people are using it.
 
 ---
 
