@@ -77,6 +77,13 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     mb = lambda n: f"{n / 1e6:.0f} MB"  # noqa: E731
 
+    # Entrypoints this script used to write. A `Dockerfile` left over from the
+    # Docker-Space era sitting beside a `sdk: gradio` README is ambiguous at
+    # best, so drop anything we no longer emit rather than letting deploy/
+    # accumulate across rebuilds.
+    for stale in ("Dockerfile", "Dockerfile.space", "Procfile"):
+        (out / stale).unlink(missing_ok=True)
+
     papers_src = Path(cfg["paths"]["papers"])
     chunks_src = Path(cfg["paths"]["chunks"])
     for path in (papers_src, chunks_src):
@@ -101,8 +108,11 @@ def main() -> None:
     # --- everything else the Space needs, so deploy/ is pushable as-is ------
     for name in ("src", "configs", "scripts"):
         copy_tree(Path(name), out / name)
-    shutil.copy("requirements.txt", out / "requirements.txt")
-    shutil.copy("Dockerfile.space", out / "Dockerfile")
+    # The Gradio SDK runs `app.py` from the repo root, so it moves up a level.
+    shutil.copy("spaces/app.py", out / "app.py")
+    # Serving dependencies only - not the repo's training/eval superset. See
+    # the header of spaces/requirements.txt for why that distinction matters.
+    shutil.copy("spaces/requirements.txt", out / "requirements.txt")
     shutil.copy("spaces/README.md", out / "README.md")
 
     # Spaces rejects files over 10 MB outside LFS; data and indices are far over.
@@ -119,15 +129,18 @@ def main() -> None:
         stray.unlink(missing_ok=True)
 
     total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())
-    print(f"\n[deploy] {out}/ is a complete Space repo - {mb(total)}")
-    print("[deploy] Dockerfile, README.md, requirements.txt, src/, configs/,")
+    print(f"\n[deploy] {out}/ is a complete Gradio Space repo - {mb(total)}")
+    print("[deploy] app.py, README.md, requirements.txt, src/, configs/,")
     print("[deploy] scripts/, data/, cache/, .gitattributes, .gitignore")
-    print("\nPush it:")
+    print("\nCreate the Space first (SDK Gradio, hardware ZeroGPU - the only free")
+    print("option for a personal account), then push:")
     print(f"  cd {out}")
     print("  git init -b main && git lfs install")
-    print('  git add -A && git commit -m "ResearchOS backend"')
+    print('  git add -A && git commit -m "ResearchOS"')
     print("  git remote add origin https://huggingface.co/spaces/USER/SPACE")
-    print("  git push -u origin main")
+    # --force because the web form seeds the Space with its own README, so a
+    # fresh local history shares no ancestor and is rejected as non-fast-forward.
+    print("  git push -u origin main --force")
     print("\nThen set GROQ_API_KEY and RESEARCHOS_ALLOWED_ORIGINS in Space settings.")
     print("Full sequence in DEPLOY.md.")
 

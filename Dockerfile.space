@@ -1,14 +1,16 @@
-# ResearchOS backend for Hugging Face Spaces (free CPU tier).
+# ResearchOS backend as a plain CPU container.
 #
-# Rename to `Dockerfile` in the Space repo — Spaces looks for that exact name.
+# NOT the free path on Hugging Face any more. Docker Spaces are billed as
+# compute, and a free personal account can only run Gradio Spaces on ZeroGPU —
+# see DEPLOY.md, which builds that instead. This file is still the right answer
+# for a VPS, a paid Docker Space, or anywhere you control the host.
 #
-# The free tier gives 16 GB RAM and 2 vCPU, which is enough: the models need
-# about 2.1 GB. The constraint is the 2 vCPU, so configs/ml.cpu.yaml halves the
-# candidate set the cross-encoder has to read.
+# 2 vCPU and 16 GB is enough: the models need about 2.1 GB. The constraint is
+# the CPU, so configs/ml.cpu.yaml halves the candidate set the cross-encoder
+# has to read.
 #
-# Free Spaces sleep when idle and wake on the next request. Model weights are
-# baked into the image and the indices ship with the repo, so a wake is seconds
-# rather than the three minutes a cold rebuild would take.
+# Model weights are baked into the image and the indices ship with the repo, so
+# a restart is seconds rather than the three minutes a cold rebuild would take.
 
 FROM python:3.11-slim
 

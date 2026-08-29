@@ -107,7 +107,16 @@ def seed_everything(seed: int) -> int:
 
 
 def device() -> str:
-    """Return the torch device string this machine should use."""
+    """Return the torch device string this machine should use.
+
+    RESEARCHOS_DEVICE overrides autodetection. Needed on ZeroGPU Spaces, where
+    torch.cuda.is_available() is patched to return True (CUDA emulation) even
+    though real CUDA only exists inside @spaces.GPU functions - trusting it
+    crashes model loading with "Low-level CUDA init reached".
+    """
+    forced = os.environ.get("RESEARCHOS_DEVICE", "").strip().lower()
+    if forced in ("cpu", "cuda"):
+        return forced
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 

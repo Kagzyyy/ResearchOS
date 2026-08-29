@@ -37,13 +37,24 @@ CONFIG_PATH = os.environ.get("RESEARCHOS_ML_CONFIG", "configs/ml.yaml")
 state: dict[str, Any] = {}
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
+def build_state() -> None:
+    """Load the pipeline and its supporting stores into `state`.
+
+    A plain function rather than lifespan-only code because the Hugging Face
+    Space cannot run this app's lifespan: on ZeroGPU the platform holds the
+    port until Gradio's own launch() is called, so there the API is attached to
+    Gradio's already-running server and this is called directly instead.
+    """
     cfg = load_config(CONFIG_PATH)
     state["cfg"] = cfg
     state["pipeline"] = MLPipeline(cfg)
     state["log"] = FeedbackLog(cfg["paths"]["feedback_db"])
     state["uploads"] = UploadStore(cfg["paths"].get("upload_dir", "cache/uploads"))
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    build_state()
     yield
     state.clear()
 

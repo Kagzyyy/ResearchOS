@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from beir import util
-from beir.datasets.data_loader import GenericDataLoader
-
+# beir is deliberately NOT imported at module level. Serving imports this module
+# for Corpus and passage_text only, and the deployed Space does not install the
+# evaluation stack - a top-level import took the whole app down on startup.
 Corpus = dict[str, dict[str, str]]
 Queries = dict[str, str]
 Qrels = dict[str, dict[str, int]]
@@ -14,6 +14,8 @@ Qrels = dict[str, dict[str, int]]
 
 def download_dataset(url: str, cache_dir: str = "datasets") -> str:
     """Download and unzip a BEIR dataset. Returns the extracted folder path."""
+    from beir import util
+
     name = url.rstrip("/").split("/")[-1].removesuffix(".zip")
     target = Path(cache_dir) / name
     if target.exists():
@@ -23,6 +25,8 @@ def download_dataset(url: str, cache_dir: str = "datasets") -> str:
 
 def load_split(url: str, split: str, cache_dir: str = "datasets") -> tuple[Corpus, Queries, Qrels]:
     """Load one split of a BEIR dataset."""
+    from beir.datasets.data_loader import GenericDataLoader
+
     data_path = download_dataset(url, cache_dir)
     return GenericDataLoader(data_folder=data_path).load(split=split)
 

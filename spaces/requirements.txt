@@ -1,0 +1,46 @@
+# Serving dependencies only — this is what the Space installs.
+#
+# The repo's own requirements.txt is a superset: it also carries the training
+# and evaluation stack (beir, pytrec-eval-terrier, wandb, peft, onnx,
+# onnxruntime, anthropic), none of which the serving path imports. Two reasons
+# to leave them out rather than reuse that file:
+#
+#   pytrec-eval-terrier compiles C at install time, and a Space build has no
+#   reason to risk failing on a toolchain it only needs for offline evaluation;
+#   and every package here is downloaded on each rebuild, so the shorter list is
+#   also the faster, more reliable build.
+#
+# torch is pinned to 2.8.0 because ZeroGPU — the only hardware a free personal
+# account may run a Gradio Space on — supports 2.8.0 and above and rejects the
+# 2.6.0 the rest of the project pins. Nothing here touches the GPU (see
+# app.py), but the runtime still inspects torch at import.
+
+# --- models ---
+torch==2.8.0
+transformers==5.15.1
+sentence-transformers==6.0.0
+numpy==2.4.6
+
+# --- retrieval ---
+bm25s==0.3.11
+PyStemmer==3.1.0
+faiss-cpu==1.15.0
+
+# --- serving ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+gradio==6.26.0
+python-multipart==0.0.20
+httpx==0.28.1
+# 2.12.5, not the 2.13.4 the repo uses elsewhere: the Space's builder
+# installs gradio[mcp], whose mcp extra caps pydantic at 2.12.5.
+pydantic==2.12.5
+
+# --- live arXiv fallback and PDF upload ---
+arxiv==4.0.1
+pymupdf==1.28.2
+
+# --- generation and config ---
+groq==1.7.0
+PyYAML==6.0.3
+python-dotenv==1.2.3

@@ -1,177 +1,249 @@
 # Deploying ResearchOS
 
-The front end goes on Vercel. **The backend cannot.**
+## Read this first, because the free tier moved
 
-It loads 40,379 passages and two models into memory, takes two to three minutes
-to start, and keeps that state between requests. Vercel runs serverless
-functions — no persistent memory, hard execution limits, no GPU. There is no
-arrangement of this backend that fits, so it stays on a machine you control and
-Vercel talks to it over the network.
+Hugging Face now bills **both** Docker and Gradio Spaces as compute. A free
+personal account has exactly two options:
+
+| | What you get | Cost |
+|---|---|---|
+| **Static Space** | Front-end files only. No Python, no backend. | Free for everyone |
+| **Gradio Space on ZeroGPU** | Full Python process. Up to **2** of them. | Free, with conditions |
+
+The conditions on the second are real: your account needs a **verified email**
+and must be **older than 30 days**. If it is newer than that, no amount of
+configuration will let you create the Space — skip to
+[If your account does not qualify yet](#if-your-account-does-not-qualify-yet).
+
+CPU Basic is greyed out for you because it is now a paid tier for Gradio Spaces.
+That is not a mistake on your end.
 
 ---
 
-## The two-part shape
+## The shape this takes
+
+Because a Gradio Space runs a real Python process, the Space is the whole
+product — not just an API the front end talks to:
 
 ```
   visitor's browser
         │  HTTPS
         ▼
-  Vercel  ── your Next.js front end (static, no secrets)
-        │  HTTPS
-        ▼
-  Hugging Face Space  ── FastAPI + BM25 + FAISS + reranker + your Groq key
+  Hugging Face Space  ─────────────────────────────
+        /            the interface (Gradio)
+        /papers /explain /upload /health   the API
+        │
+        └── BM25 + FAISS + reranker + your Groq key
 ```
 
-Vercel serves the interface; the Space does the work. Neither depends on your
-laptop being on.
+Vercel becomes **optional**. Deploy it if you want the Next.js interface at your
+own domain; it calls the same Space over the network. Skip it and the Space's
+own interface is already a working, shareable product.
+
+### About ZeroGPU
+
+The Space asks for ZeroGPU hardware but **never claims a GPU**, deliberately.
+BM25, a flat FAISS index over 40k passages and a 278M cross-encoder over 30
+candidates are a few seconds of CPU; the writing happens on Groq's servers.
+Taking a ZeroGPU slot would spend the *visitor's* daily quota — two minutes for
+anyone not signed in — and start failing once it ran out, to save latency nobody
+would notice. Staying on CPU costs no quota, never queues, and cannot run out.
+
+Two consequences worth knowing: `spaces/requirements.txt` pins **torch 2.8.0**,
+because ZeroGPU rejects the 2.6.0 the rest of the project uses; and the README
+pins Python 3.12.12, one of the two versions ZeroGPU supports.
 
 ---
 
-## 1. Give the backend a public HTTPS address
-
-Three options, in the order I would try them.
-
-### Hugging Face Spaces — free, permanent, no card (recommended)
-
-The only free tier that actually fits: 16 GB RAM, 2 vCPU, a persistent process,
-Docker, and a permanent HTTPS URL. The models need ~2.1 GB, so there is room.
+## 1. Build the Space repo
 
 ```bash
 python scripts/prepare_deploy.py
 ```
 
-That writes `deploy/` — the papers file slimmed from 86 MB to 16 MB by dropping
-full text the chunks already hold, plus the chunks and the prebuilt indices.
-About 182 MB total.
+That writes `deploy/` — about 182 MB, complete and pushable:
 
-Then create a **Docker** Space at huggingface.co/new-space and push:
-
-```
-Dockerfile          <- Dockerfile.space, renamed
-README.md           <- spaces/README.md (the YAML header is required)
-src/  configs/  scripts/  requirements.txt
-data/  cache/       <- from deploy/
-```
-
-`data/` and `cache/` are over 10 MB, so `git lfs track "data/*.jsonl" "cache/**"`
-before committing them.
-
-Set under **Settings → Variables and secrets**:
-
-| Name | Kind |
+| | |
 |---|---|
-| `GROQ_API_KEY` | secret |
-| `RESEARCHOS_ALLOWED_ORIGINS` | variable — your Vercel origin |
-| `RESEARCHOS_API_TOKEN` | secret, optional |
+| `app.py` | Gradio UI mounted onto the FastAPI app |
+| `README.md` | the YAML header is what tells Spaces this is a Gradio app |
+| `requirements.txt` | serving dependencies only, not the training stack |
+| `src/ configs/ scripts/` | the application |
+| `data/` | papers slimmed from 86 MB to 16 MB, plus the chunks |
+| `cache/ml/` | prebuilt BM25 and FAISS indices |
 
-Your backend is then `https://<user>-<space>.hf.space`, permanently, whether or
-not your laptop is on.
+The indices ship with the repo on purpose. Building them takes about three
+minutes, and free Spaces sleep when idle — without them, every wake would pay
+that cost.
 
-**The tradeoff is speed.** Two vCPU instead of a 4060 means the cross-encoder
-takes seconds rather than milliseconds — `configs/ml.cpu.yaml` halves the
-candidate set to compensate, and the Space uses it automatically. Expect a few
-seconds per query. Free Spaces also sleep when idle; the weights are baked into
-the image and the indices ship with the repo, so waking is seconds, not the
-three minutes a cold rebuild would cost.
+## 2. Create the Space
 
-### Tunnel to your machine — fastest to set up, laptop must stay on
+At [huggingface.co/new-space](https://huggingface.co/new-space):
+
+| Field | Value |
+|---|---|
+| SDK | **Gradio** → Blank |
+| Hardware | **ZeroGPU** (the only free option) |
+| Storage bucket | None — the repo carries its own data |
+| Visibility | Public |
+| License | AGPL-3.0 |
+
+## 3. Push
+
+```bash
+cd deploy
+git init -b main
+git lfs install
+git add -A
+git commit -m "ResearchOS"
+git remote add origin https://huggingface.co/spaces/USER/SPACE
+git push -u origin main --force
+```
+
+`--force` is needed and is safe here. Creating a Space through the web form
+initialises the repo with its own `README.md` and `.gitattributes`, so a fresh
+local history has no common ancestor and a plain push is rejected as
+non-fast-forward. You are overwriting two placeholder files on a Space that has
+never run.
+
+`prepare_deploy.py` writes the `.gitattributes` that puts `data/` and
+`cache/ml/` through LFS. Spaces rejects files over 10 MB otherwise, and both are
+far over.
+
+The first build takes several minutes: it installs torch and downloads the model
+weights. Watch the **Logs** tab. It is ready when the log reads
+`Application startup complete`.
+
+## 4. Set the secrets
+
+**Settings → Variables and secrets:**
+
+| Name | Kind | Value |
+|---|---|---|
+| `GROQ_API_KEY` | secret | your Groq key |
+| `RESEARCHOS_ALLOWED_ORIGINS` | variable | your Vercel origin — only if you deploy the front end |
+| `RESEARCHOS_RATE_LIMIT` | variable | requests per minute per visitor, default 20 |
+| `RESEARCHOS_API_TOKEN` | secret | optional; when set the REST API needs it, the Gradio UI stays open |
+
+Without `GROQ_API_KEY` the Space still runs — search and retrieval work, you get
+ranked passages instead of written answers.
+
+Setting a variable restarts the Space. A running process cannot see a variable
+set after it started.
+
+## 5. Check it
+
+```bash
+python scripts/healthcheck.py --base https://USER-SPACE.hf.space
+```
+
+Thirteen checks against the live endpoints. All thirteen pass against this build
+locally; if they pass against the public address they will pass from a
+visitor's browser.
+
+Then open `https://USER-SPACE.hf.space` and search for something. The header
+should read *"8,330 papers · 40,379 passages"*.
+
+---
+
+## 6. The front end, if you want it
+
+Point Vercel at this repository with **Root Directory** set to `web`.
+
+| Name | Value |
+|---|---|
+| `NEXT_PUBLIC_API_BASE` | `https://USER-SPACE.hf.space`, no trailing slash |
+| `NEXT_PUBLIC_API_TOKEN` | the same value as `RESEARCHOS_API_TOKEN`, if you set one |
+
+Both are inlined into the browser bundle **at build time**. Changing either
+needs a redeploy, not a restart. Neither may hold a real secret — the token
+deters casual abuse, it does not protect anything.
+
+Then add that Vercel origin to `RESEARCHOS_ALLOWED_ORIGINS` on the Space, or
+every request will fail CORS in the browser while working fine from curl.
+
+---
+
+## If your account does not qualify yet
+
+ZeroGPU needs a verified email and an account older than 30 days. Until then:
+
+**Tunnel to your machine.** Free, works today, laptop must stay awake:
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8100
 ```
 
-It prints a `https://<random>.trycloudflare.com` address. That is your
-`NEXT_PUBLIC_API_BASE`.
+It prints a `https://<random>.trycloudflare.com` address — that is your
+`NEXT_PUBLIC_API_BASE`. The address changes on restart; a named tunnel on a free
+Cloudflare account keeps it stable. When the laptop sleeps, the site is down for
+everyone.
 
-The quick tunnel needs no account and changes its address each restart — fine
-for showing people, annoying as a permanent home. A named tunnel on a free
-Cloudflare account keeps a stable hostname.
-
-**It only works while your machine is awake and the tunnel is running.** When
-the laptop sleeps, the site shows "waiting for the backend" to everyone.
-
-### Small server — permanent, you pay
-
-`Dockerfile.ml` builds a CPU-only image. Any VPS with 4 GB RAM will run it.
-Reranking is roughly ten times slower without the GPU — acceptable, not
-pleasant. Mount `data/` (built offline by `scripts/ingest_arxiv.py`) read-only
-and give `cache/ml/` somewhere writable for the indices.
+**A small server.** `Dockerfile.space` builds a CPU image that runs on any VPS
+with 4 GB of RAM. Permanent, and you pay for it.
 
 ---
 
-## 2. Set a token before anyone else has the link
+## Adding the licence text
 
-Your Groq key is on the backend, so deploying the front end never exposes it.
-But an open backend is an open invitation to spend your free tier.
-
-In `.env` on the backend machine — **written as UTF-8**, because PowerShell's
-`>` produces UTF-16:
-
-```
-GROQ_API_KEY=gsk_...
-RESEARCHOS_API_TOKEN=pick-something-long-and-random
-RESEARCHOS_ALLOWED_ORIGINS=https://your-project.vercel.app
-RESEARCHOS_RATE_LIMIT=20
-```
-
-`RESEARCHOS_ALLOWED_ORIGINS` must contain your exact Vercel domain. Miss it and
-every request fails CORS in the browser while working fine from curl — which is
-a confusing hour if you do not know to look for it.
-
-Restart the backend after changing `.env`. A running process cannot see a
-variable set after it started.
-
----
-
-## 3. Deploy the front end
-
-Point Vercel at this repository with **Root Directory** set to `web`.
-
-Environment variables (Project → Settings → Environment Variables):
-
-| Name | Value |
-|---|---|
-| `NEXT_PUBLIC_API_BASE` | your HTTPS backend address, no trailing slash |
-| `NEXT_PUBLIC_API_TOKEN` | the same token as `RESEARCHOS_API_TOKEN` |
-
-Both are inlined into the browser bundle **at build time**. Changing either
-requires a redeploy, not just a restart. Neither may hold a real secret — the
-token is a deterrent against casual abuse, not protection.
-
----
-
-## 4. Check it before sharing
+The README declares AGPL-3.0 and the app footer links back to the Space repo,
+which is what AGPL asks for when software is used over a network. To ship the
+full text too:
 
 ```bash
-python scripts/healthcheck.py --base https://your-backend.example --token YOUR_TOKEN
+curl -o deploy/LICENSE https://www.gnu.org/licenses/agpl-3.0.txt
 ```
 
-Thirteen checks against the live endpoints. If they pass from your machine
-against the public address, they will pass from a visitor's browser too.
-
-Then open the Vercel URL in a private window. The header should read
-*"8,330 papers · 40,379 passages"*. If it says the deployment isn't finished,
-`NEXT_PUBLIC_API_BASE` did not get set — that message exists specifically to
-tell you so rather than showing a generic network error.
+PyMuPDF is the reason for AGPL rather than something permissive — it is
+AGPL-licensed unless you buy a commercial licence from Artifex.
 
 ---
 
-## What visitors get
+## What was tested here, and what could not be
 
-Anyone with the link can search, explain citations, and upload a PDF. There are
-no accounts; the rate limit is per IP and resets on backend restart. Search
-history is per-browser, in `localStorage`, and never leaves their machine.
+The whole of `deploy/` was run locally exactly as the Space runs it — `app.py`
+from the `deploy/` directory, with the key supplied as an environment variable —
+and all thirteen healthcheck checks pass against it, plus the Gradio interface
+driven by hand through both tabs.
+
+Two things can only be confirmed on the Space itself, because they are
+properties of that environment:
+
+**Python 3.12.12.** This machine has 3.11, so the build ran there. Every pinned
+package publishes 3.12 wheels, so this should be uneventful. If a wheel is
+missing, drop `python_version` from the README header and let Spaces choose.
+
+**Running on ZeroGPU without claiming a GPU.** Nothing in Hugging Face's
+documentation requires a `@spaces.GPU` function to exist, and this app has none
+by design. If the Space refuses to start for that reason, the fix is three lines
+in `app.py` — `import spaces`, a trivial `@spaces.GPU(duration=5)` function, and
+adding `spaces` to `requirements.txt`. The retrieval path still would not need
+to call it.
 
 ## What to expect to go wrong
 
-**Everything works locally, nothing works on Vercel.** Almost always
-`RESEARCHOS_ALLOWED_ORIGINS` missing the Vercel domain. The browser console says
-CORS; `curl` says fine.
+**The build fails installing a package.** `spaces/requirements.txt` is
+deliberately not the repo's `requirements.txt`: the training stack includes
+`pytrec-eval-terrier`, which compiles C at install time and has no business in a
+serving build. If you swapped the files, swap back.
 
-**It worked, then stopped.** The quick tunnel's address changes on restart, and
-`NEXT_PUBLIC_API_BASE` was baked in at build time. Use a named tunnel, or
-redeploy with the new address.
+**"No such file or directory: data/arxiv_chunks.jsonl".** LFS did not push. Run
+`git lfs install` *before* the first commit, or the files are committed as
+pointer text. `git lfs ls-files` in `deploy/` should list them.
+
+**The Space builds, then dies on startup.** Check the Logs tab for the real
+error. If it complains about torch and ZeroGPU, the pin in `requirements.txt`
+drifted from the versions ZeroGPU supports (2.8.0 and above).
+
+**Everything works on the Space, nothing works on Vercel.** Almost always
+`RESEARCHOS_ALLOWED_ORIGINS` missing the exact Vercel domain. The browser
+console says CORS; `curl` says fine.
 
 **Answers stop but search keeps working.** Groq's free tier allows 8,000 tokens
-per minute across every user. Several people asking at once will queue. The
-backend waits and retries rather than failing, so it reads as slow, not broken.
+per minute across every user of your key. Several people asking at once queue
+up. The backend waits and retries rather than failing, so it reads as slow
+rather than broken.
+
+**The first request after a quiet spell is slow.** Free Spaces sleep. The
+indices ship with the repo so waking is seconds, not the three minutes a rebuild
+would cost.
