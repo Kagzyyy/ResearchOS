@@ -5,9 +5,49 @@
   --foreground: #171717;
 }
 
+/* Design tokens for the shadcn-style components (button, leaderboard-rankings).
+   Defined once, dark-only: this site renders on black everywhere, so there is
+   no light variant to keep in sync. Values are picked to match the console's
+   existing white/[0.03] surfaces rather than shadcn's stock slate. */
+:root {
+  --card: #0b0b0d;
+  --muted: #17171b;
+  --muted-foreground: #8b8b96;
+  --border: rgba(255, 255, 255, 0.10);
+  --primary: #6366f1;
+  --primary-foreground: #ffffff;
+  --secondary: #17171b;
+  --secondary-foreground: #ededed;
+  --accent: #1c1c22;
+  --accent-foreground: #ededed;
+  --destructive: #ef4444;
+  --ring: rgba(255, 255, 255, 0.35);
+  --input: rgba(255, 255, 255, 0.10);
+  /* Medal colours for the top three ranks. */
+  --rank-1: #fbbf24;
+  --rank-2: #cbd5e1;
+  --rank-3: #d08b5b;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-rank-1: var(--rank-1);
+  --color-rank-2: var(--rank-2);
+  --color-rank-3: var(--rank-3);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

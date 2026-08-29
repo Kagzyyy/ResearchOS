@@ -36,6 +36,7 @@ import {
   type Passage,
 } from "@/lib/api";
 import BoxLoader from "@/components/ui/box-loader";
+import { LeaderboardRankings } from "@/components/ui/leaderboard-rankings";
 import {
   addHistory,
   clearHistory,
@@ -550,11 +551,37 @@ function PapersView({ result, queryId }: { result: PapersResult; queryId: number
           `top ${result.top_score.toFixed(3)}`,
         ]}
       />
-      <div className="space-y-3">
-        {result.papers.map((p, i) => (
-          <PaperCard key={p.paper_id} paper={p} rank={i + 1} queryId={queryId} />
-        ))}
-      </div>
+      {/* Ranked results as a leaderboard: rank number, medal for the top three,
+          title, byline, and the reranker score on the right. Clicking a row
+          logs the click (the feedback signal the backend learns from) and opens
+          the paper on arXiv.
+          `border-border` is explicit because Tailwind v4's bare `border`
+          utility sets width only and falls back to currentColor. */}
+      <LeaderboardRankings
+        className="border-border bg-transparent"
+        showAvatar={false}
+        rankings={result.papers.map((p, i) => ({
+          userId: p.paper_id,
+          rank: i + 1,
+          userName: p.title,
+          byline: [
+            p.authors.slice(0, 3).join(", ") + (p.authors.length > 3 ? " et al." : ""),
+            p.published,
+            p.primary_category,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          value: p.score,
+          avatarUrl: null,
+          displayed: true,
+        }))}
+        onUserClick={(item) => {
+          const paper = result.papers.find((p) => p.paper_id === item.userId);
+          if (!paper) return;
+          if (queryId !== null) logClick(queryId, paper.doc_id).catch(() => {});
+          window.open(paper.arxiv_url, "_blank", "noopener,noreferrer");
+        }}
+      />
       <FeedbackBar queryId={queryId} />
     </div>
   );

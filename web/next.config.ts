@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Emits .next/standalone: a self-contained server for deployment.
-  output: "standalone",
-  /* config options here */
+  // No `output: "standalone"` here: that mode is for self-hosting (Docker) and
+  // breaks Vercel's build, which manages its own serverless output. If you ever
+  // containerise this front end, add it back for that build only.
 };
 
 export default nextConfig;
