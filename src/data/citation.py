@@ -21,7 +21,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from src.data.arxiv_source import Paper, download_pdf, extract_text, fetch_metadata
+from src.data.arxiv_source import (
+    ArxivUnavailable, Paper, download_pdf, extract_text, fetch_metadata_bounded,
+)
 
 # 2301.08243 / 2301.08243v2, with optional arXiv: prefix or abs/pdf URL
 ARXIV_ID_RE = re.compile(
@@ -40,19 +42,18 @@ QUOTED_RE = re.compile(r"[\"“‘']([^\"”’']{12,})[\"”’']")
 
 
 def _safe_fetch(query: str, max_results: int) -> list[Paper]:
-    """An arXiv lookup that never takes down the request.
+    """An arXiv lookup that never takes down - or stalls - the request.
 
-    Interactive lookups use a 1s delay and a single retry - the 3s/3-retry
-    defaults are for bulk ingestion and turn one 429 into a minute of blocking.
-    A rate-limited search returns nothing and the caller degrades.
+    Bounded by fetch_metadata_bounded: retries off, results cached, and the
+    request stops waiting after the budget. Disabling retries alone was not
+    enough - a throttled arXiv still held each call ~46s before its 429, and
+    resolve() can make two calls in a row. A failed lookup returns nothing
+    and the caller degrades.
     """
     try:
-        return fetch_metadata(
-            query, max_results=max_results, delay_seconds=0.0,
-            sort_by_relevance=True, num_retries=0, use_cache=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[arxiv] lookup failed ({type(exc).__name__}); degrading")
+        return fetch_metadata_bounded(query, max_results=max_results)
+    except ArxivUnavailable as exc:
+        print(f"[arxiv] lookup skipped ({exc}); degrading")
         return []
 
 

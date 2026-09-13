@@ -75,7 +75,7 @@ answer:
   # Below this (but above min_mean_score) the corpus has *something* but not
   # much, so live arXiv results are added alongside it and the answer draws on
   # both. Above it, a strong corpus hit answers without touching the network.
-  # Costs ~3s when it fires. Set to 0.0 to disable enrichment entirely.
+  # Costs up to citation.live_budget_s when it fires. 0.0 disables it.
   enrich_below: 0.80
   # Live arXiv results are filtered per passage, not on their mean: a keyword
   # search returns a mixed bag, so a few loose hits must not bury the one paper
@@ -98,6 +98,10 @@ answer:
 # Citation lookup: paste a reference you saw in a paper, get it explained.
 citation:
   allow_remote: true        # fall back to the arXiv API when not in the corpus
+  # Hard wall-clock cap on live arXiv search inside a request. arXiv throttles
+  # shared IPs (Hugging Face Spaces) and a throttled call can hang ~50s before
+  # failing; past this budget the answer goes out from the corpus instead.
+  live_budget_s: 5.0
   fetch_full_text: true     # download the PDF for on-demand papers
   # Cap the on-demand PDF cache. Citation lookup downloads one PDF per
   # unresolved paper, which grows without bound on a shared deployment.

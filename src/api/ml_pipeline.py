@@ -42,7 +42,9 @@ from typing import Any
 
 from src.api.llm import explain_paper, generate_answer, is_configured
 from src.config import device
-from src.data.arxiv_source import Paper, fetch_metadata, read_papers
+from src.data.arxiv_source import (
+    ArxivUnavailable, Paper, fetch_metadata_bounded, read_papers,
+)
 from src.data.chunking import chunk_paper, chunks_to_corpus, read_chunks
 from src.data.citation import looks_like_a_question, resolve
 from src.retrieval.bm25 import BM25Retriever
@@ -387,24 +389,35 @@ class MLPipeline:
         papers a user asks about were never ingested, and telling them "not in
         this corpus" is honest but useless when the paper plainly exists.
 
-        Abstracts only - no PDF fetch - so this stays a couple of seconds.
+        Abstracts only - no PDF fetch. Bounded by `citation.live_budget_s`
+        (default 5s) of wall-clock across both queries: this is an optional
+        enrichment, so when arXiv is slow the answer goes out from the corpus
+        rather than waiting. Uses the breaker shared with citation lookup, so
+        once arXiv throttles one of them, neither keeps asking.
         """
         terms = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", question)
                  if w.lower() not in _QUERY_STOPWORDS][:12]
         if not terms:
             return []
-        try:
-            found = fetch_metadata(
-                "all:" + " AND ".join(f'"{t}"' for t in terms[:4]),
-                max_results=top_k,
-                sort_by_relevance=True,
-            )
-            if not found:
-                found = fetch_metadata(
-                    "all:" + " ".join(terms[:8]), max_results=top_k, sort_by_relevance=True
-                )
-        except Exception:  # noqa: BLE001 - a failed fallback is not a failed request
-            return []
+
+        budget = float(self.cfg["citation"].get("live_budget_s", 5.0))
+        deadline = time.monotonic() + budget
+        queries = [
+            "all:" + " AND ".join(f'"{t}"' for t in terms[:4]),  # precise first
+            "all:" + " ".join(terms[:8]),                         # then looser
+        ]
+        found: list[Paper] = []
+        for query in queries:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.25:
+                break
+            try:
+                found = fetch_metadata_bounded(query, max_results=top_k,
+                                               budget_s=remaining)
+            except ArxivUnavailable:
+                return []  # a failed enrichment is not a failed request
+            if found:
+                break
 
         return [
             {
@@ -449,8 +462,13 @@ class MLPipeline:
         remote_ok = self.cfg["citation"].get("allow_remote", True)
         enrich_below = ac.get("enrich_below", 0.0)
 
+        # Timed on its own: this was the one stage outside every timer, which is
+        # how a 45s arXiv stall reported itself as "retrieval_and_rerank: 1783ms".
+        live_ms = 0.0
         if remote_ok and (not confident or mean_top < enrich_below):
+            live_start = time.perf_counter()
             live = self.search_arxiv_live(question)
+            live_ms = (time.perf_counter() - live_start) * 1000.0
             if live:
                 # arXiv always returns *something*, so live results must clear
                 # the same confidence bar as the corpus. Without this the
@@ -504,8 +522,9 @@ class MLPipeline:
             "generation_configured": is_configured(),
             "timing_ms": {
                 "retrieval_and_rerank": round(retrieval_ms, 1),
+                "arxiv_live": round(live_ms, 1),
                 "generation": round(generation_ms, 1),
-                "total": round(retrieval_ms + generation_ms, 1),
+                "total": round(retrieval_ms + live_ms + generation_ms, 1),
             },
         }
 

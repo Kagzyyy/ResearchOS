@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -170,6 +173,78 @@ def prune_pdf_cache(pdf_dir: str | Path, max_gb: float) -> int:
     if removed:
         print(f"[arxiv] pruned {removed} cached PDFs, cache now {total / 1e9:.1f} GB")
     return removed
+
+
+
+# ----------------------------------------------------------------------------
+# Request-time lookups
+#
+# fetch_metadata above is built for ingestion, where waiting out a rate limit
+# is correct. Inside a user's request it is not: the arxiv client has no
+# request timeout, and a throttled arXiv does not fail fast - a lookup was
+# measured holding the connection 46-50s before answering HTTP 429, with
+# retries already disabled. Hugging Face Spaces share outbound IPs, so the
+# deployed backend is throttled far more often than a laptop is.
+#
+# So request-time callers go through fetch_metadata_bounded: the call runs on
+# a small pool and the request stops waiting at the budget. One breaker is
+# shared by every caller - live search and citation lookup hit the same API,
+# so if one is being throttled the other is too, and continuing to ask only
+# extends the throttle.
+# ----------------------------------------------------------------------------
+
+REQUEST_BUDGET_S = 5.0
+BREAKER_COOLDOWN_S = 300.0
+
+_REQUEST_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="arxiv-request")
+_BREAKER_LOCK = threading.Lock()
+_BREAKER = {"open_until": 0.0}
+
+
+class ArxivUnavailable(RuntimeError):
+    """arXiv did not answer in time, refused, or is cooling down."""
+
+
+def breaker_open() -> bool:
+    with _BREAKER_LOCK:
+        return time.monotonic() < _BREAKER["open_until"]
+
+
+def _trip_breaker(reason: str) -> None:
+    with _BREAKER_LOCK:
+        _BREAKER["open_until"] = time.monotonic() + BREAKER_COOLDOWN_S
+    print(f"[arxiv] {reason} - pausing request-time lookups for "
+          f"{BREAKER_COOLDOWN_S:.0f}s", flush=True)
+
+
+def fetch_metadata_bounded(
+    query: str,
+    max_results: int,
+    budget_s: float = REQUEST_BUDGET_S,
+    sort_by_relevance: bool = True,
+) -> list[Paper]:
+    """fetch_metadata for use inside a request: bounded, retry-free, cached.
+
+    Raises ArxivUnavailable instead of blocking. Callers treat that as "no
+    result" and degrade - these lookups are always a fallback or an
+    enrichment, never the only way to answer.
+    """
+    if breaker_open():
+        raise ArxivUnavailable("cooling down after a recent failure")
+    future = _REQUEST_POOL.submit(
+        fetch_metadata, query, max_results=max_results,
+        sort_by_relevance=sort_by_relevance,
+        delay_seconds=0.0, num_retries=0, use_cache=True,
+    )
+    try:
+        return future.result(timeout=max(budget_s, 0.1))
+    except FuturesTimeout:
+        # The worker thread finishes on its own; the request just stops waiting.
+        _trip_breaker(f"no answer within {budget_s:.1f}s")
+        raise ArxivUnavailable(f"timed out after {budget_s:.1f}s") from None
+    except Exception as exc:  # noqa: BLE001
+        _trip_breaker(f"{type(exc).__name__}: {str(exc)[:80]}")
+        raise ArxivUnavailable(str(exc)) from exc
 
 
 def download_pdf(
