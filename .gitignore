@@ -43,3 +43,6 @@ cache/uploads/
 
 # Output of scripts/prepare_deploy.py
 deploy/
+
+# CRITIC-R1: local API-quota bookkeeping, per machine and per day
+data/critic/.groq_budget*.json
