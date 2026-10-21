@@ -194,16 +194,27 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--max-passage-chars", type=int, default=450)
     ap.add_argument("--out", default="results/critic_localization.json")
+    ap.add_argument("--exclude-from", default=None,
+                    help="drop the first --exclude-n items of this benchmark file, so a "
+                         "bigger set can be scored only on questions never analysed before")
+    ap.add_argument("--exclude-n", type=int, default=100)
+    ap.add_argument("--cache", default=None, help="raw-output cache (default: <out>.raw.json)")
     args = ap.parse_args()
 
-    trajs = [t for t in read_trajectories(args.trajectories)
-             if t.verdict is Verdict.INCORRECT and t.gold_indices][: args.n]
+    def wrong_with_gold(path: str) -> list[Trajectory]:
+        return [t for t in read_trajectories(path)
+                if t.verdict is Verdict.INCORRECT and t.gold_indices]
+
+    trajs = wrong_with_gold(args.trajectories)[: args.n]
+    if args.exclude_from:
+        seen = {t.qid for t in wrong_with_gold(args.exclude_from)[: args.exclude_n]}
+        trajs = [t for t in trajs if t.qid not in seen]
     baseline = sum(len(t.gold_indices) / len(t.passages) for t in trajs) / len(trajs)
     print(f"[loc] {len(trajs)} held-out wrong answers with known gold documents")
     print(f"[loc] random-guess baseline: {baseline:.1%}\n")
 
     out_path = Path(args.out)
-    cache_path = out_path.with_suffix(".raw.json")
+    cache_path = Path(args.cache) if args.cache else out_path.with_suffix(".raw.json")
     raw: dict = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
 
     adapters = {"base": None, "sft": args.sft, "dqa": args.dqa}
@@ -243,9 +254,18 @@ def main() -> None:
         for s in scored:
             if s["stage"]:
                 stages[s["stage"]] = stages.get(s["stage"], 0) + 1
+        # Overall hit rate rewards always naming a document. An API model that
+        # mostly blames the answer step instead (valid under the schema) scores
+        # low overall but can be precise when it does name one - so precision
+        # given a document was named is reported beside it.
+        named = sum(1 for s in scored if s["stage"] == Stage.INFORMATION.value)
+        nlo, nhi = wilson(k, named)
         results["arms"][arm] = {
             "hits": k, "hit_rate": round(k / len(trajs), 4),
             "ci95": [round(lo, 4), round(hi, 4)],
+            "named_document": named,
+            "hit_given_named": round(k / max(named, 1), 4),
+            "hit_given_named_ci95": [round(nlo, 4), round(nhi, 4)],
             "lift_over_chance": round((k / len(trajs)) / baseline, 2),
             "valid_format": round(sum(s["valid_format"] for s in scored) / len(trajs), 4),
             "stages": stages,
@@ -262,12 +282,14 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
-    print(f"\n{'arm':<8}{'hit rate':>10}{'95% CI':>18}{'x chance':>10}{'format':>9}")
-    print("-" * 55)
+    print(f"\n{'arm':<8}{'hit rate':>10}{'95% CI':>18}{'x chance':>10}{'format':>9}"
+          f"{'named doc':>11}{'hit|named':>11}")
+    print("-" * 77)
     print(f"{'random':<8}{baseline:>10.1%}{'':>18}{1.0:>10.2f}")
     for arm, r in results["arms"].items():
         print(f"{arm:<8}{r['hit_rate']:>10.1%}   [{r['ci95'][0]:.1%}, {r['ci95'][1]:.1%}]"
-              f"{r['lift_over_chance']:>10.2f}{r['valid_format']:>9.0%}")
+              f"{r['lift_over_chance']:>10.2f}{r['valid_format']:>9.0%}"
+              f"{r['named_document']:>11}{r['hit_given_named']:>11.1%}")
     print("\npaired comparisons (exact McNemar):")
     for name, r in results["pairwise"].items():
         vals = list(r.values())

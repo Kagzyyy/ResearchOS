@@ -143,7 +143,7 @@ def shaped(score: float, max_reward: float, beta: float) -> float:
         r = R_max * (exp(beta*s) - 1) / (exp(beta) - 1)
 
     Maps s in [0,1] onto [0, R_max], but *convexly*: at beta=3, s=0.3 earns
-    only 16% of R_max while s=0.9 earns 78%. That shape deliberately starves
+    only 8% of R_max, s=0.5 earns 18%, and s=0.9 earns 73%. That shape deliberately starves
     partial credit, so vaguely-related waffle scores near zero instead of
     collecting half marks.
     """

@@ -40,6 +40,7 @@ import threading
 import time
 from typing import Any
 
+from src.api.diagnose import diagnose
 from src.api.llm import explain_paper, generate_answer, is_configured
 from src.config import device
 from src.data.arxiv_source import (
@@ -283,6 +284,11 @@ class MLPipeline:
                         mean_top = sum(p["score"] for p in fetched) / len(fetched)
                         best_score = max(p["score"] for p in fetched)
 
+        # v2: nothing convincing in the corpus or on arXiv - diagnose why.
+        diagnosis, diagnosis_ms = None, 0.0
+        if not confident:
+            diagnosis, diagnosis_ms = self._diagnose(topic, papers, None)
+
         return {
             "topic": topic,
             "source": source,
@@ -290,7 +296,9 @@ class MLPipeline:
             "confident": confident,
             "top_score": round(best_score, 3),
             "mean_top_score": round(mean_top, 3),
-            "timing_ms": {"total": round((time.perf_counter() - start) * 1000.0, 1)},
+            "diagnosis": diagnosis,
+            "timing_ms": {"total": round((time.perf_counter() - start) * 1000.0, 1),
+                          "diagnosis": round(diagnosis_ms, 1)},
         }
 
     def _rescore_live(
@@ -355,7 +363,7 @@ class MLPipeline:
             answer_text = generate_answer(
                 f"About the paper '{title}': {question}",
                 top,
-                model=ac["model"],
+                model=self._answer_models(),
                 max_tokens=ac["max_tokens"],
             )
             generation_ms = (time.perf_counter() - gen_start) * 1000.0
@@ -441,6 +449,9 @@ class MLPipeline:
         start = time.perf_counter()
         passages = self.retrieve(question)
         retrieval_ms = (time.perf_counter() - start) * 1000.0
+        # Kept for diagnosis: if everything below fails, these weak corpus hits
+        # are exactly what the critic needs to see to say what went wrong.
+        corpus_passages = passages
 
         ac = self.cfg["answer"]
         best, mean_top, confident = self._confidence([p["score"] for p in passages])
@@ -506,9 +517,14 @@ class MLPipeline:
         elif generate:
             gen_start = time.perf_counter()
             answer_text = generate_answer(
-                question, passages, model=ac["model"], max_tokens=ac["max_tokens"]
+                question, passages, model=self._answer_models(), max_tokens=ac["max_tokens"]
             )
             generation_ms = (time.perf_counter() - gen_start) * 1000.0
+
+        # v2: the gate fired and nothing rescued it, so say what went wrong.
+        diagnosis, diagnosis_ms = None, 0.0
+        if not passages:
+            diagnosis, diagnosis_ms = self._diagnose(question, corpus_passages, None)
 
         return {
             "question": question,
@@ -520,13 +536,32 @@ class MLPipeline:
             "citations": passages,
             "distinct_papers": distinct_papers(passages),
             "generation_configured": is_configured(),
+            "diagnosis": diagnosis,
             "timing_ms": {
                 "retrieval_and_rerank": round(retrieval_ms, 1),
                 "arxiv_live": round(live_ms, 1),
                 "generation": round(generation_ms, 1),
-                "total": round(retrieval_ms + live_ms + generation_ms, 1),
+                "diagnosis": round(diagnosis_ms, 1),
+                "total": round(retrieval_ms + live_ms + generation_ms + diagnosis_ms, 1),
             },
         }
+
+    def _answer_models(self) -> list[str]:
+        """Primary answer model, then fallbacks for when its daily cap is spent."""
+        ac = self.cfg["answer"]
+        return [ac["model"], *ac.get("fallback_models", [])]
+
+    def _diagnose(self, question: str, passages: list[dict[str, Any]],
+                  answer: str | None) -> tuple[dict[str, Any] | None, float]:
+        """Run the v2 failure diagnosis, if enabled. Never raises."""
+        dc = self.cfg.get("diagnosis", {})
+        if not dc.get("enabled", True):
+            return None, 0.0
+        t0 = time.perf_counter()
+        d = diagnose(question, passages, answer,
+                     model=dc.get("models") or dc.get("model", self.cfg["answer"]["model"]),
+                     budget_s=float(dc.get("budget_s", 6.0)))
+        return (d.to_json() if d else None), (time.perf_counter() - t0) * 1000.0
 
     # ------------------------------------------------------- citation lookup
 
@@ -591,6 +626,13 @@ class MLPipeline:
                 "source": answer["source"],
                 "generation_configured": is_configured(),
                 "timing_ms": answer["timing_ms"],
+                "diagnosis": answer.get("diagnosis"),
+                # The complete /ask payload, so the client can render it
+                # directly. Without this the web client discarded the answer
+                # computed here and called /ask, re-running retrieval,
+                # reranking and generation - every Explain-mode question cost
+                # two full pipeline passes and two Groq calls.
+                "answer_result": answer,
             }
 
         resolution = resolve(
@@ -639,7 +681,7 @@ class MLPipeline:
             explanation = explain_paper(
                 paper.title,
                 passages + related,
-                model=self.cfg["answer"]["model"],
+                model=self._answer_models(),
                 max_tokens=self.cfg["citation"]["max_tokens"],
             )
             gen_ms = (time.perf_counter() - gen_start) * 1000.0

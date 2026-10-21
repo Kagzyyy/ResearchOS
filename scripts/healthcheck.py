@@ -127,6 +127,21 @@ def main() -> None:
             PASS if declined else FAIL,
             f"mean {result['mean_top_score']}",
         )
+        # v2: a declined result carries a structured diagnosis. The key must
+        # always exist; the value may be null when the breaker or budget is
+        # holding the diagnosis back, which is a skip, not a failure.
+        if "diagnosis" not in result:
+            checks.record("v2 diagnosis on declined result", FAIL, "field missing - v1 backend?")
+        elif result["diagnosis"] is None:
+            checks.record("v2 diagnosis on declined result", SKIP,
+                          "null (no key, breaker open, or budget)")
+        else:
+            d = result["diagnosis"]
+            ok = d.get("location") in ("search",) or str(d.get("location", "")).startswith(
+                "information:Doc")
+            checks.record("v2 diagnosis on declined result", PASS if ok else FAIL,
+                          f"{d.get('location')} in {d.get('latency_ms', 0) / 1000:.1f}s, "
+                          f"query={d.get('suggested_query')!r}")
     except Exception as exc:  # noqa: BLE001
         checks.record("declines off-topic questions", FAIL, f"{type(exc).__name__}: {exc}")
 

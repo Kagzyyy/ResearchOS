@@ -1,0 +1,117 @@
+{
+  "n": 100,
+  "baseline": 0.208,
+  "arms": {
+    "base": {
+      "hits": 44,
+      "hit_rate": 0.44,
+      "ci95": [
+        0.3467,
+        0.5377
+      ],
+      "named_document": 89,
+      "hit_given_named": 0.4944,
+      "hit_given_named_ci95": [
+        0.3929,
+        0.5963
+      ],
+      "lift_over_chance": 2.12,
+      "valid_format": 0.91,
+      "stages": {
+        "information": 89,
+        "search": 1,
+        "think": 1
+      }
+    },
+    "sft": {
+      "hits": 40,
+      "hit_rate": 0.4,
+      "ci95": [
+        0.3094,
+        0.498
+      ],
+      "named_document": 99,
+      "hit_given_named": 0.404,
+      "hit_given_named_ci95": [
+        0.3127,
+        0.5025
+      ],
+      "lift_over_chance": 1.92,
+      "valid_format": 0.99,
+      "stages": {
+        "information": 99
+      }
+    },
+    "dqa": {
+      "hits": 46,
+      "hit_rate": 0.46,
+      "ci95": [
+        0.3656,
+        0.5574
+      ],
+      "named_document": 99,
+      "hit_given_named": 0.4646,
+      "hit_given_named_ci95": [
+        0.3696,
+        0.5624
+      ],
+      "lift_over_chance": 2.21,
+      "valid_format": 0.99,
+      "stages": {
+        "information": 99
+      }
+    },
+    "groq20": {
+      "hits": 14,
+      "hit_rate": 0.14,
+      "ci95": [
+        0.0853,
+        0.2214
+      ],
+      "named_document": 17,
+      "hit_given_named": 0.8235,
+      "hit_given_named_ci95": [
+        0.5897,
+        0.9381
+      ],
+      "lift_over_chance": 0.67,
+      "valid_format": 0.98,
+      "stages": {
+        "answer": 48,
+        "information": 17
+      }
+    }
+  },
+  "pairwise": {
+    "base_vs_sft": {
+      "only_base": 15,
+      "only_sft": 11,
+      "p_exact": 0.5572
+    },
+    "base_vs_dqa": {
+      "only_base": 10,
+      "only_dqa": 12,
+      "p_exact": 0.83181
+    },
+    "base_vs_groq20": {
+      "only_base": 39,
+      "only_groq20": 9,
+      "p_exact": 2e-05
+    },
+    "sft_vs_dqa": {
+      "only_sft": 2,
+      "only_dqa": 8,
+      "p_exact": 0.10938
+    },
+    "sft_vs_groq20": {
+      "only_sft": 33,
+      "only_groq20": 7,
+      "p_exact": 4e-05
+    },
+    "dqa_vs_groq20": {
+      "only_dqa": 39,
+      "only_groq20": 7,
+      "p_exact": 0.0
+    }
+  }
+}

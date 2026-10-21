@@ -88,8 +88,9 @@ def build_dataset(traj_path: str, sup_path: str | None, tokenizer,
         #
         # So the verdict is pre-filled from ground truth and the critic
         # generates only location/reason/fix. That trains the capability
-        # which demonstrably works (localisation 41% vs 21% chance,
-        # p=6e-7) instead of one that does not - and it matches how this
+        # which demonstrably works (localisation 44% vs 21% chance on 100
+        # held-out wrong answers, binomial p=2e-7) instead of one that does
+        # not - and it matches how this
         # would deploy in ResearchOS, where the existing mean-of-top-5
         # confidence gate already supplies a reliable verdict.
         prefix = f"<verdict>{ref.verdict.value}</verdict><location>"

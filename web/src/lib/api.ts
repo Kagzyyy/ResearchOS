@@ -39,6 +39,18 @@ export interface Passage {
   text: string;
 }
 
+/** v2: structured failure diagnosis (CRITIC-R1 format), present only when
+ *  the confidence gate fired and nothing rescued the query. */
+export interface Diagnosis {
+  location: string;              // "search" or "information:DocK"
+  location_title: string | null; // title of the document blamed, if any
+  reason: string;
+  fix: string;
+  suggested_query: string | null;
+  model: string;
+  latency_ms: number;
+}
+
 export interface AskResult {
   query_id: number;
   question: string;
@@ -50,6 +62,7 @@ export interface AskResult {
   distinct_papers: number;
   generation_configured: boolean;
   timing_ms: { retrieval_and_rerank: number; generation: number; total: number };
+  diagnosis?: Diagnosis | null;
 }
 
 export interface PaperMeta {
@@ -78,6 +91,9 @@ export interface ExplainResult {
   related: Passage[];
   generation_configured: boolean;
   timing_ms: { total: number; generation?: number };
+  /** Full /ask payload when a question was answered here, so the client
+   *  never re-runs the pipeline with a second /ask call. */
+  answer_result?: AskResult;
 }
 
 export interface PaperHit {
@@ -106,7 +122,8 @@ export interface PapersResult {
   confident: boolean;
   top_score: number;
   mean_top_score: number;
-  timing_ms: { total: number };
+  timing_ms: { total: number; diagnosis?: number };
+  diagnosis?: Diagnosis | null;
 }
 
 export interface Health {

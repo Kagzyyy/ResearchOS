@@ -1,0 +1,460 @@
+<title>The Critic Notebook</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=Literata:ital,opsz,wght@0,7..72,400..600;1,7..72,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a lab notebook. Each entry has a narrow margin column (entry number, the
+   concept, the one number it produced) beside a reading column of ~66ch. */
+:root {
+  --paper: #f6f8f7;
+  --sheet: #ffffff;
+  --ink: #1b2629;
+  --muted: #56676b;
+  --rule: #d3dcdb;
+  --accent: #1d5c86;      /* fountain-pen blue: concepts and links */
+  --fail: #a8402c;        /* red pencil: what broke */
+  --pass: #2c7149;        /* what held */
+  --code-bg: #edf2f1;
+  --display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --body: "Literata", Georgia, "Times New Roman", serif;
+  --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #111617; --sheet: #161d1e; --ink: #e2e9e8; --muted: #94a5a7; --rule: #2a3537;
+    --accent: #7db6dd; --fail: #e3826e; --pass: #7cc497; --code-bg: #1c2527;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #111617; --sheet: #161d1e; --ink: #e2e9e8; --muted: #94a5a7; --rule: #2a3537;
+  --accent: #7db6dd; --fail: #e3826e; --pass: #7cc497; --code-bg: #1c2527;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--paper); color: var(--ink);
+  font-family: var(--body); font-size: 17px; line-height: 1.62;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 64px;
+}
+.wrap { max-width: 1060px; margin: 0 auto; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+h1, h2, h3, .label { font-family: var(--display); }
+h1 {
+  font-stretch: 72%; font-weight: 800; font-size: clamp(2.5rem, 7vw, 4.4rem);
+  line-height: 0.95; letter-spacing: -0.01em; margin: 0; text-wrap: balance;
+}
+h2 { font-stretch: 80%; font-weight: 700; font-size: 1.6rem; line-height: 1.15; margin: 0; text-wrap: balance; }
+h3 { font-stretch: 88%; font-weight: 600; font-size: 0.82rem; text-transform: uppercase;
+     letter-spacing: 0.09em; color: var(--muted); margin: 1.6em 0 0.4em; }
+p { margin: 0 0 0.9em; max-width: 66ch; }
+.label { font-stretch: 85%; font-weight: 600; font-size: 0.74rem; text-transform: uppercase;
+         letter-spacing: 0.1em; color: var(--muted); }
+
+header.top { padding-block: 56px 36px; border-bottom: 1px solid var(--rule); display: grid; gap: 22px; }
+.lede { font-size: 1.15rem; max-width: 62ch; margin: 0; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px 28px; font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.facts b { color: var(--ink); font-weight: 600; }
+
+nav.index { padding-block: 28px; border-bottom: 1px solid var(--rule); }
+nav.index ol { list-style: none; margin: 12px 0 0; padding: 0; display: grid;
+               grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 24px; }
+nav.index li { display: flex; gap: 10px; font-size: 0.95rem; }
+nav.index .n { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); padding-top: 3px; min-width: 2ch; }
+
+article.entry {
+  display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 0 40px;
+  padding-block: 44px; border-bottom: 1px solid var(--rule);
+}
+.margin { display: flex; flex-direction: column; gap: 10px; }
+.margin .num { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); }
+.margin .concept { font-family: var(--display); font-stretch: 85%; font-weight: 700; font-size: 0.95rem; color: var(--accent); line-height: 1.25; }
+.stat { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.stat .v { font-family: var(--display); font-stretch: 75%; font-weight: 800; font-size: 2rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: 0.82rem; color: var(--muted); line-height: 1.35; margin-top: 4px; }
+.stat.fail .v { color: var(--fail); }
+.stat.pass .v { color: var(--pass); }
+.main { min-width: 0; }
+.main h2 { margin-bottom: 14px; }
+
+pre.math, pre.code {
+  font-family: var(--mono); font-size: 0.84rem; line-height: 1.55;
+  background: var(--code-bg); border-radius: 4px; padding: 14px 16px; margin: 0 0 1em;
+  overflow-x: auto; max-width: 100%; color: var(--ink);
+}
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code-bg); padding: 1px 4px; border-radius: 3px; }
+.broke { border-left: 3px solid var(--fail); padding: 2px 0 2px 14px; margin: 0 0 1em; max-width: 66ch; }
+.broke .label { color: var(--fail); display: block; margin-bottom: 2px; }
+.held { border-left: 3px solid var(--pass); padding: 2px 0 2px 14px; margin: 0 0 1em; max-width: 66ch; }
+.held .label { color: var(--pass); display: block; margin-bottom: 2px; }
+
+.tablewrap { overflow-x: auto; margin: 0 0 1em; max-width: 100%; }
+table { border-collapse: collapse; font-size: 0.88rem; font-variant-numeric: tabular-nums; min-width: 420px; }
+th, td { text-align: left; padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-family: var(--display); font-stretch: 85%; font-weight: 600; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td.n { font-family: var(--mono); }
+tr.hl td { color: var(--accent); font-weight: 600; }
+
+footer { padding-block: 36px 0; color: var(--muted); font-size: 0.9rem; }
+
+@media (max-width: 760px) {
+  article.entry { grid-template-columns: minmax(0, 1fr); gap: 18px; padding-block: 34px; }
+  .margin { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; }
+  .stat { border-top: 0; padding-top: 0; margin-top: 0; flex-basis: 100%; display: flex; align-items: baseline; gap: 10px; }
+  .stat .k { margin-top: 0; }
+  body { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <span class="label">ResearchOS v2 &middot; lab notebook</span>
+  <h1>The Critic Notebook</h1>
+  <p class="lede">I implemented CRITIC-R1 (arXiv 2605.29886): a small language model trained with reinforcement learning to critique retrieval-augmented answers by saying whether an answer is wrong, where it went wrong and how to fix it. Then I took what survived measurement and put it into a live search engine. These are the deep-learning and RL ideas the work depended on, in the order they came up, each with the maths and the number it produced on this project.</p>
+  <div class="facts">
+    <span>model <b>Qwen2.5-1.5B-Instruct</b></span>
+    <span>GPU <b>RTX 4060 Laptop, 8 GB</b></span>
+    <span>data <b>HotpotQA distractor</b></span>
+    <span>algorithm <b>GRPO, written from scratch</b></span>
+  </div>
+</header>
+
+<nav class="index" aria-label="Entries">
+  <span class="label">Entries, in the order they happened</span>
+  <ol>
+    <li><span class="n">1</span><a href="#structured-output">Structured output as an action space</a></li>
+    <li><span class="n">2</span><a href="#free-labels">Labels for free from a QA dataset</a></li>
+    <li><span class="n">3</span><a href="#lora">LoRA: training 1.2% of a model</a></li>
+    <li><span class="n">4</span><a href="#sft">Supervised warm start and loss masking</a></li>
+    <li><span class="n">5</span><a href="#checkpointing">Gradient checkpointing and the KV cache</a></li>
+    <li><span class="n">6</span><a href="#grpo">GRPO: RL without a value network</a></li>
+    <li><span class="n">7</span><a href="#kl">The KL leash and the k3 estimator</a></li>
+    <li><span class="n">8</span><a href="#reward-hacking">When the reward says "always say CORRECT"</a></li>
+    <li><span class="n">9</span><a href="#shaping">Reward shaping and gated rewards</a></li>
+    <li><span class="n">10</span><a href="#vram">Living inside 8 GB</a></li>
+    <li><span class="n">11</span><a href="#statistics">Measuring it honestly</a></li>
+    <li><span class="n">12</span><a href="#product">From research artifact to product</a></li>
+  </ol>
+</nav>
+
+<!-- 1 -->
+<article class="entry" id="structured-output">
+  <aside class="margin">
+    <span class="num">Entry 1</span>
+    <span class="concept">Constrained generation &middot; Format reward</span>
+    <div class="stat fail"><div class="v">12%</div><div class="k">critiques from the untrained model that parsed (n=200)</div></div>
+  </aside>
+  <div class="main">
+    <h2>Structured output as an action space</h2>
+    <p>A critic that writes free prose can't be scored automatically, and you can't run RL without a score. CRITIC-R1 makes the critic write four tags in a fixed order, which turns "critique this answer" into choosing from a small, checkable action space.</p>
+    <pre class="math">&lt;verdict&gt;CORRECT | INCORRECT | UNSURE&lt;/verdict&gt;
+&lt;location&gt;none | search:stepK | information:DocK | think:stepK | answer&lt;/location&gt;
+&lt;reason&gt;...&lt;/reason&gt;&lt;fix&gt;...&lt;/fix&gt;
+
+coupling rule:  verdict = CORRECT      &lt;=&gt;  location = none
+                verdict = INCORRECT/UNSURE  =&gt;  location set, reason non-empty</pre>
+    <p>The parser is the first reward. Following the paper's Algorithm 1, an output that fails to parse gets a flat penalty and nothing else is scored, so there is no partial credit for a good reason inside broken tags.</p>
+    <pre class="math">r_format = +0.2   if parse(y) succeeds
+R(y)     = -1.0   if parse(y) fails      (gamma = 1.0, all other terms skipped)</pre>
+    <div class="broke"><span class="label">What broke</span>The untrained 1.5B model produced a strictly valid critique 12% of the time. Under Algorithm 1 that means 88% of early rollouts score exactly &minus;1.0, every sample in a group scores the same, and GRPO gets no gradient at all (see entry 6). This "format cliff" is why RL can't start cold: it needs a supervised warm start first.</div>
+  </div>
+</article>
+
+<!-- 2 -->
+<article class="entry" id="free-labels">
+  <aside class="margin">
+    <span class="num">Entry 2</span>
+    <span class="concept">Weak supervision &middot; Token F1</span>
+    <div class="stat"><div class="v">102 / 66 / 32</div><div class="k">INCORRECT / CORRECT / UNSURE in the 200 held-out trajectories</div></div>
+  </aside>
+  <div class="main">
+    <h2>Labels for free from a QA dataset</h2>
+    <p>A critic needs examples of right and wrong answers with known causes. HotpotQA's distractor setting supplies them: each question comes with 10 paragraphs, exactly 2 of which hold the answer. I had the 1.5B model answer each question over those paragraphs, then labelled its answer by comparing it with the gold answer.</p>
+    <pre class="math">P  = |pred tokens &cap; gold tokens| / |pred tokens|
+R  = |pred tokens &cap; gold tokens| / |gold tokens|
+F1 = 2PR / (P + R)
+
+verdict = CORRECT    if F1 &ge; 0.8
+          INCORRECT  if F1 &le; 0.3
+          UNSURE     otherwise
+
+example: gold "Charles Dickens", pred "Dickens"
+         P = 1/1, R = 1/2, F1 = 0.667  -&gt; UNSURE</pre>
+    <p>The two gold paragraph indices give a ground truth for <em>where</em> an answer should have looked. That is what makes localisation measurable later: if the critic names <code>information:Doc4</code> and Doc4 is a gold paragraph, it found the evidence the answer needed.</p>
+    <p>The training and evaluation trajectories come from different HotpotQA splits, so no evaluation question was ever seen in training.</p>
+  </div>
+</article>
+
+<!-- 3 -->
+<article class="entry" id="lora">
+  <aside class="margin">
+    <span class="num">Entry 3</span>
+    <span class="concept">LoRA &middot; Parameter-efficient fine-tuning</span>
+    <div class="stat pass"><div class="v">18.5M</div><div class="k">trainable parameters out of 1.54B (1.2%)</div></div>
+  </aside>
+  <div class="main">
+    <h2>LoRA: training 1.2% of a model</h2>
+    <p>Full fine-tuning doesn't fit. In bf16 with Adam, a 1.5B model needs about 3 GB of weights, 3 GB of gradients and 12 GB of fp32 optimizer state before a single activation is stored. LoRA freezes the original weights and learns a low-rank correction beside each linear layer.</p>
+    <pre class="math">h = W0 x + (alpha / r) * B A x
+
+W0 : out x in    frozen
+A  : r x in      trained, random init
+B  : out x r     trained, init 0   -&gt; the model starts exactly as the base model
+params per layer = r * (in + out)
+
+Qwen2.5-1.5B, r = 16, alpha = 16, all linear layers, per transformer block:
+  q, o        16 * (1536 + 1536) = 49,152   each
+  k, v        16 * (1536 +  256) = 28,672   each
+  gate, up    16 * (1536 + 8960) = 167,936  each
+  down        16 * (8960 + 1536) = 167,936
+  block total 659,456  x 28 blocks = 18,464,768</pre>
+    <p>LoRA had a second payoff in RL. The KL penalty in entry 7 needs a frozen reference model, and with LoRA that reference is the same weights with the adapter switched off. It costs no memory and no second model load.</p>
+    <pre class="code">with model.disable_adapter():          # reference policy = base weights
+    ref_logp = token_logprobs(model, ids)</pre>
+  </div>
+</article>
+
+<!-- 4 -->
+<article class="entry" id="sft">
+  <aside class="margin">
+    <span class="num">Entry 4</span>
+    <span class="concept">Supervised fine-tuning &middot; Loss masking</span>
+    <div class="stat pass"><div class="v">6.83 &rarr; 4.28 GB</div><div class="k">peak VRAM after computing logits only for target tokens</div></div>
+  </aside>
+  <div class="main">
+    <h2>Supervised warm start and loss masking</h2>
+    <p>Before RL, the critic was taught the format by imitation on teacher-written critiques. The loss is ordinary next-token cross-entropy, counted only over the critique tokens. The prompt (question plus ten paragraphs) is context; training the model to reproduce it would waste capacity on copying.</p>
+    <pre class="math">L = -(1/|T|) * sum over t in T of  log p_theta(y_t | y_&lt;t, x)
+T = positions of the target critique (prompt positions are masked out)</pre>
+    <p>The mask also cut memory. The final projection to the vocabulary is the biggest activation in the network, and the default computes it at every position, including the 1,700 prompt tokens whose loss is then thrown away.</p>
+    <pre class="math">logits for one sequence = positions x vocab x 4 bytes
+                        = 1792 x 151,936 x 4  &asymp; 1.09 GB  (plus the same again for its gradient)
+
+model(input_ids, logits_to_keep=len(target) + 1)   # project only the target positions</pre>
+    <div class="held"><span class="label">What held</span>Strict format validity went from 12% to 49.5% on full critiques, and to 99% once the verdict was supplied. That was enough for RL rollouts to produce groups with different rewards.</div>
+  </div>
+</article>
+
+<!-- 5 -->
+<article class="entry" id="checkpointing">
+  <aside class="margin">
+    <span class="num">Entry 5</span>
+    <span class="concept">Gradient checkpointing &middot; KV cache</span>
+    <div class="stat fail"><div class="v">garbage</div><div class="k">what rollouts looked like until generation got its own mode</div></div>
+  </aside>
+  <div class="main">
+    <h2>Gradient checkpointing and the KV cache</h2>
+    <p>Backpropagation needs every intermediate activation from the forward pass. Gradient checkpointing keeps only the activations at block boundaries and recomputes the rest during the backward pass, trading about one extra forward pass (~33% more compute) for a large cut in activation memory.</p>
+    <p>RL alternates two very different workloads: generating rollouts and training on them. Generation relies on the KV cache, which stores each past token's keys and values so that each new token costs one step instead of re-running the whole prefix.</p>
+    <pre class="math">tokens processed to generate T new tokens after a prompt of length P:
+  with KV cache     P + T
+  without           sum_{k=1..T} (P + k)  &asymp;  T*P + T^2/2</pre>
+    <div class="broke"><span class="label">What broke</span>With checkpointing on, the library turns the cache off, and the first GRPO rollouts came back as fluent nonsense. Every reward was &minus;1.0 and the run looked like it was "learning" nothing. The fix is a context manager that puts the model into a correct generation state and restores the training state afterwards.</div>
+    <pre class="code">@contextmanager
+def _generation_mode(self):
+    self.model.gradient_checkpointing_disable()
+    self.model.config.use_cache = True
+    self.model.eval()
+    try:
+        yield
+    finally:
+        self.model.gradient_checkpointing_enable()
+        self.model.config.use_cache = False
+        self.model.train()</pre>
+  </div>
+</article>
+
+<!-- 6 -->
+<article class="entry" id="grpo">
+  <aside class="margin">
+    <span class="num">Entry 6</span>
+    <span class="concept">GRPO &middot; Policy gradients &middot; Advantages</span>
+    <div class="stat"><div class="v">21%</div><div class="k">of groups at worst had identical rewards and taught nothing</div></div>
+  </aside>
+  <div class="main">
+    <h2>GRPO: RL without a value network</h2>
+    <p>PPO estimates how good a sample was relative to expectation using a learned value network, which is a second model as large as the policy. GRPO (Group Relative Policy Optimisation) removes it: sample several completions for the same prompt and use the group's own mean as the baseline. Because every member of a group saw the identical prompt, prompt difficulty cancels out.</p>
+    <pre class="math">for each prompt x, sample G completions y_1..y_G, score rewards r_1..r_G
+
+A_i = (r_i - mean(r)) / (std(r) + eps)          group-relative advantage
+
+rho_i = pi_theta(y_i | x) / pi_old(y_i | x)      importance ratio (per token)
+L = -mean[ min(rho * A, clip(rho, 1 - 0.2, 1 + 0.2) * A) ] + beta * KL
+
+example, G = 4:  r = [0.7, -1.0, 0.7, 0.5]
+  mean = 0.225   std = 0.712
+  A    = [+0.67, -1.72, +0.67, +0.39]
+  -&gt; push up the three good critiques, push the broken one down hard</pre>
+    <p>I ran one update per batch of rollouts, so the ratio is exactly 1 in value and the clip never activates. The gradient still flows through <code>rho</code>, and it reduces to the plain policy gradient <code>&nabla; log &pi; &middot; A</code>. The trainer refuses a configuration with more inner epochs, because the "old" log-probs it would need were never stored.</p>
+    <div class="broke"><span class="label">What broke</span>A group whose samples all score the same has standard deviation 0. Dividing float noise by ~0 manufactures a large, meaningless gradient. Those groups now get advantage exactly 0. The share of flat groups, which reached 21% in the localisation stage, became the most useful health metric of the run: it is the fraction of compute that taught nothing.</div>
+    <p>Settings: G = 4, 2 prompts per step, learning rate 1e-6, clip 0.2, KL coefficient 0.003, LoRA r16 &alpha;16. The paper's settings, scaled from 3B on two A100s to 1.5B on one 8 GB laptop GPU.</p>
+  </div>
+</article>
+
+<!-- 7 -->
+<article class="entry" id="kl">
+  <aside class="margin">
+    <span class="num">Entry 7</span>
+    <span class="concept">KL regularisation &middot; Monte Carlo estimators</span>
+    <div class="stat fail"><div class="v">70</div><div class="k">logged KL from a single token before clamping</div></div>
+  </aside>
+  <div class="main">
+    <h2>The KL leash and the k3 estimator</h2>
+    <p>RL with a learned or rule-based reward will exploit any gap in the reward. A KL penalty keeps the policy close to the reference model, so it can only win reward with outputs the base model already finds plausible. The exact KL needs a sum over the whole vocabulary at every step; instead it is estimated from the sampled tokens.</p>
+    <pre class="math">d  = log pi_ref(token) - log pi_theta(token)
+
+k1 = -d                 unbiased, but negative half the time (noisy)
+k3 = exp(d) - d - 1     unbiased and always &ge; 0   (Schulman's estimator)
+
+check: d = 0     -&gt; k3 = 0       (policies agree)
+       d = 0.5   -&gt; k3 = 0.149
+       d = 10    -&gt; k3 = 22,015  &lt;- one token can dominate the batch</pre>
+    <div class="broke"><span class="label">What broke</span>A smoke run logged KL = 70 from a single token where the two models disagreed sharply. The exponential turns one outlier into a gradient that swamps the reward. Clamping <code>d</code> to &plusmn;10 bounds it without changing the estimator anywhere a healthy run operates.</div>
+    <pre class="code">d  = torch.clamp(ref_lp - new_lp, -10.0, 10.0)
+kl = torch.exp(d) - d - 1.0
+loss = (pg + cfg.kl_coef * kl).mean()</pre>
+  </div>
+</article>
+
+<!-- 8 -->
+<article class="entry" id="reward-hacking">
+  <aside class="margin">
+    <span class="num">Entry 8</span>
+    <span class="concept">Reward design &middot; Expected value &middot; Reward hacking</span>
+    <div class="stat fail"><div class="v">0 / 200</div><div class="k">answers the RL-trained critic flagged as wrong</div></div>
+  </aside>
+  <div class="main">
+    <h2>When the reward says "always say CORRECT"</h2>
+    <p>The verdict reward is the paper's Table 7 payoff matrix. It punishes calling a correct answer wrong (&minus;1.0) far more than calling a wrong answer correct (&minus;0.3), because a false alarm sends a good answer into a rewrite that can break it.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>truth &darr; / predicted &rarr;</th><th>CORRECT</th><th>INCORRECT</th><th>UNSURE</th></tr></thead>
+      <tbody>
+        <tr><td>CORRECT</td><td class="n">+0.7</td><td class="n">&minus;1.0</td><td class="n">&minus;0.1</td></tr>
+        <tr><td>INCORRECT</td><td class="n">&minus;0.3</td><td class="n">+0.5</td><td class="n">&minus;0.1</td></tr>
+        <tr><td>UNSURE</td><td class="n">+0.1</td><td class="n">&minus;0.2</td><td class="n">0.0</td></tr>
+      </tbody>
+    </table></div>
+    <p>Before training on any reward, compute what the constant policies earn. On this data (33% correct, 51% incorrect, 16% unsure):</p>
+    <pre class="math">E[always CORRECT]   = 0.33(0.7)  + 0.51(-0.3) + 0.16(0.1)  = +0.094
+E[always INCORRECT] = 0.33(-1.0) + 0.51(0.5)  + 0.16(-0.2) = -0.107</pre>
+    <p>A critic that can't tell right from wrong maximises reward by approving everything. Measured directly, the 1.5B model's ability to separate right from wrong answers was AUC 0.447, below the 0.5 of a coin flip. GRPO did exactly what it was asked: it found the best policy available to a model with no signal, which was to say CORRECT every time.</p>
+    <div class="held"><span class="label">The lesson</span>This wasn't a bug in the optimiser. The reward was being maximised honestly. When RL "collapses", check the constant-policy baseline of the reward and whether the model has any signal to learn from before blaming the algorithm.</div>
+  </div>
+</article>
+
+<!-- 9 -->
+<article class="entry" id="shaping">
+  <aside class="margin">
+    <span class="num">Entry 9</span>
+    <span class="concept">Reward shaping &middot; Gated rewards &middot; Prefilling</span>
+    <div class="stat"><div class="v">0.93 &rarr; 1.06</div><div class="k">mean localisation-stage reward over 100 GRPO steps</div></div>
+  </aside>
+  <div class="main">
+    <h2>Reward shaping and gated rewards</h2>
+    <p>The paper's second stage, DQA, rewards the quality of the diagnosis: a correct location, a reason that matches the reference reason, a fix that matches the reference fix. Text similarity scores are mapped through a convex curve so that vague, half-relevant text earns almost nothing.</p>
+    <pre class="math">r = R_max * (exp(beta * s) - 1) / (exp(beta) - 1)      s in [0, 1], beta = 3
+
+s = 0.3  -&gt;  8% of R_max
+s = 0.5  -&gt; 18%
+s = 0.9  -&gt; 73%</pre>
+    <p>The diagnosis reward is gated on the verdict being right, so a model can't earn diagnosis credit for explaining an error that doesn't exist:</p>
+    <pre class="math">R = r_format + r_verdict + 1[verdict_pred = verdict_true] * (r_location + r_reason + r_fix + r_aux)</pre>
+    <div class="broke"><span class="label">What broke</span>After entry 8 the critic never predicted INCORRECT, so the gate never opened and stage 2 received no signal. The fix was to prefill the verdict (the prompt ends with <code>&lt;verdict&gt;INCORRECT&lt;/verdict&gt;&lt;location&gt;</code>) and train localisation on its own, 343 located examples. The verdict question moved somewhere else entirely (entry 12).</div>
+    <p>One deliberate deviation from the paper: where the reference reason was a template rather than a teacher-written explanation, the reason and fix rewards are switched off, so the model isn't trained to imitate boilerplate.</p>
+  </div>
+</article>
+
+<!-- 10 -->
+<article class="entry" id="vram">
+  <aside class="margin">
+    <span class="num">Entry 10</span>
+    <span class="concept">GPU memory &middot; Truncation &middot; Batching</span>
+    <div class="stat fail"><div class="v">~13&times;</div><div class="k">slowdown when Windows silently spills VRAM to system RAM</div></div>
+  </aside>
+  <div class="main">
+    <h2>Living inside 8 GB</h2>
+    <p>On Linux, running out of GPU memory raises an error. On Windows, the NVIDIA driver by default spills the overflow into system RAM over PCIe. Nothing fails; everything gets about 13 times slower, so a training run that should take an hour looks hung. I treated free VRAM as a budget instead.</p>
+    <ul>
+      <li><p><b>Headroom check.</b> Every generation batch requires 0.8 GB free before it starts. If an allocation fails anyway, the batch is halved and retried.</p></li>
+      <li><p><b>One sample per backward pass.</b> Batched training pads sequences on the left, which shifts where each completion starts. Processing one concatenated prompt+completion at a time with gradient accumulation removed both the padding waste and an indexing bug that came with it.</p></li>
+      <li><p><b>Truncate from the left.</b> Prompts longer than 1,536 tokens get cut. Cutting from the right removed the assistant cue at the end of 37% of long prompts, so the model was asked to continue a paragraph instead of writing a critique. Cutting from the left drops the least relevant paragraph text and keeps the instruction.</p></li>
+      <li><p><b>Stop strings.</b> Generation stops at <code>&lt;/fix&gt;</code> instead of running to the 160-token limit, which shortens most rollouts.</p></li>
+    </ul>
+  </div>
+</article>
+
+<!-- 11 -->
+<article class="entry" id="statistics">
+  <aside class="margin">
+    <span class="num">Entry 11</span>
+    <span class="concept">Confidence intervals &middot; Paired tests &middot; AUC</span>
+    <div class="stat"><div class="v" id="loc-headline">51.2%</div><div class="k">localisation hit rate on 250 fresh questions, against 20.3% for random guessing</div></div>
+  </aside>
+  <div class="main">
+    <h2>Measuring it honestly</h2>
+    <p>The localisation benchmark gives every critic the same held-out wrong answers, prefills the verdict, and counts a hit when the critic names one of the two gold paragraphs. Random guessing hits about 20.5% of the time. The first run used 100 questions. When that turned out too small to separate the models, I generated 250 more that no earlier analysis had touched and reran every arm on them.</p>
+    <div class="tablewrap" id="loc-table"><table>
+      <thead><tr><th>critic</th><th>first 100</th><th>fresh 250</th><th>95% CI, fresh</th></tr></thead>
+      <tbody>
+        <tr><td>random</td><td class="n">20.8%</td><td class="n">20.3%</td><td class="n">&nbsp;</td></tr>
+        <tr><td>Qwen2.5-1.5B, untrained</td><td class="n">44.0%</td><td class="n">44.0%</td><td class="n">[38.0, 50.2]</td></tr>
+        <tr><td>+ SFT</td><td class="n">40.0%</td><td class="n">48.8%</td><td class="n">[42.7, 55.0]</td></tr>
+        <tr class="hl"><td>+ SFT + GRPO (final checkpoint, step 100)</td><td class="n">46.0%</td><td class="n">51.2%</td><td class="n">[45.0, 57.3]</td></tr>
+        <tr><td>gpt-oss-20b (API, no fine-tuning)</td><td class="n">14.0%</td><td class="n">&nbsp;</td><td class="n">82% when it names a document (17 of 100)</td></tr>
+      </tbody>
+    </table></div>
+    <p>Three tools did most of the work.</p>
+    <pre class="math">Wilson interval (better than p &plusmn; 1.96*sqrt(p(1-p)/n) at small n or extreme p):
+  centre = (p + z^2/2n) / (1 + z^2/n)
+  half   = z * sqrt(p(1-p)/n + z^2/4n^2) / (1 + z^2/n)
+
+Exact McNemar (two critics on the SAME questions):
+  b = A right, B wrong      c = A wrong, B right
+  under H0 each discordant pair is a fair coin:
+  p = 2 * P(Binomial(b + c, 0.5) &le; min(b, c))
+  untrained vs SFT+GRPO, fresh 250:  b = 20, c = 38  -&gt;  p = 0.025
+  SFT vs SFT+GRPO, fresh 250:        b =  3, c =  9  -&gt;  p = 0.146
+
+AUC (does the score rank wrong answers above right ones?):
+  P(score(random wrong answer) &gt; score(random right answer))
+  0.5 = coin flip; measured 0.447 for the verdict</pre>
+    <p>McNemar beats comparing two proportions here because both critics answer the same 100 questions. The paired test discards question difficulty, which is most of the variance.</p>
+    <div class="held"><span class="label">What the numbers support</span>At n = 100 no difference between the models was significant, which is why the second set exists. On the fresh 250, the fully trained critic beats the untrained model by 7.2 points (p = 0.025). GRPO beat SFT on both sets (8 to 2, then 9 to 3 discordant pairs), but neither set alone is significant. Pooled over all 345 it reaches p = 0.0075, and I report that only with the caveat that 95 of those questions were also used in the first run.</div>
+    <p>gpt-oss-20b shows the benchmark's blind spot. Given the same prompt, it usually blamed the final answer step, which the schema allows but the benchmark doesn't count as a hit. When it did name a document, it was right 82% of the time. One number would have hidden that, so both are reported.</p>
+  </div>
+</article>
+
+<!-- 12 -->
+<article class="entry" id="product">
+  <aside class="margin">
+    <span class="num">Entry 12</span>
+    <span class="concept">System design &middot; Ablations &middot; Failure isolation</span>
+    <div class="stat"><div class="v" id="rescue-headline">when / where</div><div class="k">who decides each half in production</div></div>
+  </aside>
+  <div class="main">
+    <h2>From research artifact to product</h2>
+    <p>The experiments split the critic's job in two. Deciding <em>whether</em> an answer is wrong had no signal at this scale. Saying <em>where</em> it went wrong, once you know it is wrong, worked at twice chance. So ResearchOS v2 divides the job the same way.</p>
+    <ul>
+      <li><p><b>When:</b> v1's existing confidence gate (mean of the top-5 reranker scores) decides that a result is weak. It already separates in-corpus from out-of-corpus queries cleanly, so the critic is never asked to judge.</p></li>
+      <li><p><b>Where and how to fix:</b> a CRITIC-R1-format diagnosis names the retrieved paper that let the search down, says why, and proposes a query to run instead. The user sees it as a "Try: &hellip;" button.</p></li>
+    </ul>
+    <p>The production diagnoser is gpt-oss on Groq rather than the fine-tuned 1.5B model, because the 1.5B model would take 15&ndash;30 seconds on the free CPU host. The trained critic stays as the measured research artifact. Every production diagnosis goes through the same strict parser the critic was trained against, and one that cites a document it wasn't shown is suppressed. It runs under a 6-second budget behind a circuit breaker, so it can never make a v1 answer slower or worse.</p>
+    <h3>The ablation that keeps it honest</h3>
+    <p>If a diagnosis "fixes" a failed search, the gain might come from an LLM rephrasing the query, not from reading what went wrong. So the evaluation has a control arm that rewrites the query with the same model and never sees the retrieved documents, and it counts harms (a search v1 got right that the new query loses) as well as rescues.</p>
+    <div id="rescue-results"></div>
+  </div>
+</article>
+
+<footer>
+  Code: <a href="https://github.com/Kagzyyy/ResearchOS">github.com/Kagzyyy/ResearchOS</a> (<code>src/critic/</code> for the trainer, <code>src/api/diagnose.py</code> for production). Live app: <a href="https://researchos-brown.vercel.app">researchos-brown.vercel.app</a>.
+</footer>
+
+</div>

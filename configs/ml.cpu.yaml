@@ -103,6 +103,9 @@ answer:
   # to openai/gpt-oss-120b if you would rather have depth than speed.
   # Groq rotates its catalogue - list what you have: Groq().models.list()
   model: openai/gpt-oss-20b
+  # Each Groq model has its own 200K-token DAILY cap. When the primary's is
+  # spent, answers move to these instead of failing for the rest of the day.
+  fallback_models: [openai/gpt-oss-120b, qwen/qwen3.8-27b]
   max_tokens: 1300
 
 # Citation lookup: paste a reference you saw in a paper, get it explained.
@@ -132,3 +135,15 @@ paths:
   index_cache: cache/ml
   feedback_db: results/ml_feedback.db
   upload_dir: cache/uploads
+
+# v2: structured failure diagnosis (CRITIC-R1 format) when the confidence gate
+# fires and nothing rescues the query. Fires only on low-confidence results.
+diagnosis:
+  enabled: true
+  # Tried in order; a quota 429 moves to the next. Each model has its own
+  # daily token cap on Groq's free tier, so two models ~double capacity.
+  # 120b first: answers already spend the 20b budget, and a diagnosis
+  # (which fires on most vague queries) must never starve them. 20b is
+  # the fallback only. 120b is what scripts/eval_v2_rescue.py measures.
+  models: [openai/gpt-oss-120b, openai/gpt-oss-20b]
+  budget_s: 6.0             # hard wall-clock cap; past it, v1 behaviour

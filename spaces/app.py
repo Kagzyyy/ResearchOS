@@ -125,6 +125,21 @@ def _authors(names: list[str]) -> str:
     return f"{shown} et al." if len(names) > 3 else shown
 
 
+def _render_diagnosis(d: dict[str, Any] | None) -> str:
+    """v2: why the search struggled and what to try - CRITIC-R1 format."""
+    if not d:
+        return ""
+    blamed = ("the query itself" if d.get("location") == "search"
+              else f"“{d['location_title']}”" if d.get("location_title")
+              else d.get("location", ""))
+    out = ["### Why this search struggled",
+           f"**Weakest evidence:** {blamed}", "", d.get("reason", "")]
+    if d.get("suggested_query"):
+        out += ["", f"**Try searching:** `{d['suggested_query']}`"]
+    out += ["", "<sub>Structured diagnosis in the CRITIC-R1 format</sub>", "", "---", ""]
+    return "\n".join(out)
+
+
 def _render_papers(result: dict[str, Any]) -> str:
     papers = result.get("papers") or []
     if not papers:
@@ -134,7 +149,7 @@ def _render_papers(result: dict[str, Any]) -> str:
             "papers — try naming the method or the task more specifically."
         )
 
-    lines: list[str] = []
+    lines: list[str] = [diag] if diag else []
     if result.get("source") == "arxiv_live":
         lines.append(
             "> Not in the indexed corpus, so these came from a live arXiv search just now.\n"
@@ -169,7 +184,8 @@ def _render_papers(result: dict[str, Any]) -> str:
 
 
 def _render_explanation(result: dict[str, Any]) -> str:
-    lines: list[str] = []
+    diag = _render_diagnosis(result.get("diagnosis"))
+    lines: list[str] = [diag] if diag else []
     paper = result.get("paper")
     if paper and paper.get("title"):
         url = paper.get("arxiv_url") or ""

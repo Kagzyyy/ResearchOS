@@ -29,6 +29,7 @@ import {
   vote,
   type UploadedDoc,
   type AskResult,
+  type Diagnosis,
   type ExplainResult,
   type Health,
   type PaperHit,
@@ -124,7 +125,11 @@ export function ResearchConsole() {
           setExplainResult(res);
           summary = res.paper?.title ?? "explained";
         } else {
-          const answered = await ask(text);
+          // /explain already answered a question server-side; use that rather
+          // than calling /ask, which re-ran the whole pipeline a second time.
+          const answered = res.answer_result
+            ? { ...res.answer_result, query_id: res.query_id }
+            : await ask(text);
           setAskResult(answered);
           summary = `${answered.distinct_papers} papers`;
         }
@@ -359,9 +364,13 @@ export function ResearchConsole() {
         </Callout>
       )}
 
-      {!loading && papersResult && <PapersView result={papersResult} queryId={queryId} />}
+      {!loading && papersResult && (
+        <PapersView result={papersResult} queryId={queryId} onRetry={(q) => run(q)} />
+      )}
       {!loading && explainResult && <ExplainView result={explainResult} queryId={queryId} />}
-      {!loading && askResult && <AskView result={askResult} queryId={queryId} />}
+      {!loading && askResult && (
+        <AskView result={askResult} queryId={queryId} onRetry={(q) => run(q)} />
+      )}
     </section>
   );
 }
@@ -390,6 +399,59 @@ function ModeButton({
       {children}
       <span className="hidden text-xs font-normal text-slate-500 sm:inline">· {hint}</span>
     </button>
+  );
+}
+
+/**
+ * v2: why a search failed, and what to try instead.
+ *
+ * Shown only when the confidence gate fired and nothing rescued the query -
+ * exactly where v1 could only say "nothing scored well enough". The blamed
+ * document and the reason come from a CRITIC-R1-format diagnosis; the button
+ * runs the critic's suggested query, closing the paper's critique -> refine
+ * loop with the user in control of the second search.
+ */
+function DiagnosisPanel({
+  diagnosis,
+  onRetry,
+}: {
+  diagnosis: Diagnosis;
+  onRetry: (query: string) => void;
+}) {
+  const blamed =
+    diagnosis.location === "search"
+      ? "The query itself"
+      : diagnosis.location_title
+        ? `“${diagnosis.location_title}”`
+        : diagnosis.location;
+  return (
+    <section
+      aria-label="Why this search struggled"
+      className="rounded-2xl border border-sky-400/25 bg-sky-400/[0.05] p-5"
+    >
+      <div className="flex items-center gap-2 text-xs font-medium tracking-wide text-sky-300 uppercase">
+        <TriangleAlert size={14} aria-hidden />
+        Why this search struggled
+      </div>
+      <p className="mt-3 text-sm text-slate-200">
+        <span className="text-slate-400">Weakest evidence: </span>
+        {blamed}
+      </p>
+      <p className="mt-1.5 text-sm leading-relaxed text-slate-300">{diagnosis.reason}</p>
+      {diagnosis.suggested_query && (
+        <button
+          type="button"
+          onClick={() => onRetry(diagnosis.suggested_query!)}
+          className="mt-4 inline-flex items-center gap-2 rounded-lg border border-sky-400/40 bg-sky-400/10 px-3.5 py-2 text-sm text-sky-100 transition hover:bg-sky-400/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/60"
+        >
+          <Search size={14} aria-hidden />
+          Try: {diagnosis.suggested_query}
+        </button>
+      )}
+      <p className="mt-3 text-[11px] text-slate-500">
+        Structured diagnosis in the CRITIC-R1 format · {(diagnosis.latency_ms / 1000).toFixed(1)}s
+      </p>
+    </section>
   );
 }
 
@@ -529,9 +591,18 @@ function Meta({ items }: { items: string[] }) {
 
 /* ------------------------------------------------------------------ papers */
 
-function PapersView({ result, queryId }: { result: PapersResult; queryId: number | null }) {
+function PapersView({
+  result,
+  queryId,
+  onRetry,
+}: {
+  result: PapersResult;
+  queryId: number | null;
+  onRetry: (query: string) => void;
+}) {
   return (
     <div className="mt-8 space-y-6">
+      {result.diagnosis && <DiagnosisPanel diagnosis={result.diagnosis} onRetry={onRetry} />}
       {result.source === "arxiv_live" && (
         <Callout tone="amber" title="Not in the local corpus — fetched live from arXiv">
           The indexed sample does not cover this topic, so these came straight from the
@@ -733,9 +804,18 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
   );
 }
 
-function AskView({ result, queryId }: { result: AskResult; queryId: number | null }) {
+function AskView({
+  result,
+  queryId,
+  onRetry,
+}: {
+  result: AskResult;
+  queryId: number | null;
+  onRetry: (query: string) => void;
+}) {
   return (
     <div className="mt-8 space-y-6">
+      {result.diagnosis && <DiagnosisPanel diagnosis={result.diagnosis} onRetry={onRetry} />}
       <Callout tone="amber" title="Not a citation — answered as a question instead">
         Nothing resolved to a specific paper, so this was answered from the corpus.
       </Callout>

@@ -108,52 +108,81 @@ def is_configured() -> bool:
     return bool(os.environ.get("GROQ_API_KEY"))
 
 
+def _wait_hint(message: str) -> float | None:
+    """Seconds Groq says to wait: "try again in 28.13s" or "in 2m32.4s"."""
+    m = re.search(r"try again in (?:(\d+)h)?(?:(\d+)m)?([0-9.]+)s", message)
+    if not m:
+        return None
+    h, mins, secs = (float(g) if g else 0.0 for g in m.groups())
+    return h * 3600 + mins * 60 + secs
+
+
+def _extra_body(model: str) -> dict[str, Any]:
+    # Qwen3 reasoning models put their thinking in the content unless told not
+    # to; gpt-oss keeps it in a separate field already.
+    return {"reasoning_format": "hidden"} if model.startswith("qwen/") else {}
+
+
 def _complete(
     system: str,
     user: str,
-    model: str,
+    model: str | list[str],
     max_tokens: int,
     temperature: float,
     retries: int = 4,
     timeout_s: float = 90.0,
 ) -> str:
-    """One completion, retrying transient failures.
+    """One completion, retrying transient failures, falling back across models.
 
     The free tier rate-limits readily once more than one person is using the
     app. Without backoff a 429 surfaces to the user as a failed request, which
     is the most common way a small deployment looks broken while being fine.
+
+    Two kinds of 429 need opposite handling. A per-minute limit clears in
+    seconds, so waiting is right. A per-DAY cap (200K tokens per model on the
+    free tier) does not clear for hours - retrying the same model only fails
+    four times more slowly. That moves straight to the next model, each of
+    which has its own daily budget.
     """
     from groq import Groq
 
     client = Groq(timeout=timeout_s, max_retries=0)  # retry policy is ours, below
+    models = [model] if isinstance(model, str) else list(model)
     last: Exception | None = None
-    for attempt in range(retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                # No tools. Retrieved text must not reach any tool-calling path.
-            )
+    response = None
+    for current in models:
+        for attempt in range(retries):
+            try:
+                response = client.chat.completions.create(
+                    model=current,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    extra_body=_extra_body(current),
+                    # No tools. Retrieved text must not reach any tool-calling path.
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                message = str(exc).lower()
+                if "per day" in message:
+                    break           # daily cap: this model is done for hours
+                transient = any(
+                    t in message for t in ("rate", "429", "timeout", "503", "502", "overload")
+                )
+                if attempt == retries - 1 or not transient:
+                    raise
+                # Groq states exactly how long to wait ("try again in 28.13s").
+                # Guessing shorter than that guarantees the retry fails too.
+                hinted = _wait_hint(message)
+                delay = hinted + 1.0 if hinted is not None else min(30.0, 2.0 * (2**attempt))
+                time.sleep(min(delay, 60.0) + random.random())
+        if response is not None:
             break
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            message = str(exc).lower()
-            transient = any(
-                t in message for t in ("rate", "429", "timeout", "503", "502", "overload")
-            )
-            if attempt == retries - 1 or not transient:
-                raise
-            # Groq states exactly how long to wait ("try again in 28.13s").
-            # Guessing shorter than that guarantees the retry fails too.
-            hinted = re.search(r"try again in ([0-9.]+)s", message)
-            delay = float(hinted.group(1)) + 1.0 if hinted else min(30.0, 2.0 * (2**attempt))
-            time.sleep(delay + random.random())
-    else:  # pragma: no cover - loop always breaks or raises
+    if response is None:
         raise last or RuntimeError("completion failed")
 
     choice = response.choices[0]
@@ -173,7 +202,7 @@ def _complete(
 def generate_answer(
     question: str,
     passages: list[dict[str, Any]],
-    model: str = DEFAULT_MODEL,
+    model: str | list[str] = DEFAULT_MODEL,
     max_tokens: int = 1200,
     temperature: float = 0.2,
 ) -> str:
@@ -195,7 +224,7 @@ def generate_answer(
 def explain_paper(
     title: str,
     passages: list[dict[str, Any]],
-    model: str = DEFAULT_MODEL,
+    model: str | list[str] = DEFAULT_MODEL,
     max_tokens: int = 1400,
     temperature: float = 0.3,
 ) -> str:
