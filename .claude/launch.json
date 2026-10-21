@@ -6,6 +6,13 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "start", "--prefix", "web"],
       "port": 3000
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["scripts/serve_ml.py", "--config", "configs/ml.yaml", "--port", "8100"],
+      "port": 8100,
+      "url": "http://127.0.0.1:8100"
     }
   ]
 }

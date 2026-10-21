@@ -1,11 +1,128 @@
 # ResearchOS
 
-A scientific-literature research assistant whose retrieval quality comes from a
-**cross-encoder reranker fine-tuned here**, not from an off-the-shelf model.
+A research engine for AI/ML papers: describe a topic, paste a half-remembered
+citation, or upload a PDF, and get ranked papers and grounded answers over
+**8,330 arXiv papers (40,379 passages)**. When it can't find good evidence, it
+says so and explains what went wrong instead of guessing.
 
-The RAG app is the harness. The reranker is the point. The deliverable is the
-ablation table below: the same model, the same hyperparameters, the same seed,
-trained twice on datasets that differ **only** in how their negatives were chosen.
+**Live:** [researchos-brown.vercel.app](https://researchos-brown.vercel.app) ·
+backend on a free [Hugging Face Space](https://huggingface.co/spaces/Kagzy/ResearchOS) ·
+**Learning notebook:** [docs/critic-notebook.html](docs/critic-notebook.html), the
+DL/RL concepts behind v2 with the maths and measured numbers.
+
+Two pieces of ML work sit under the app, each with its own measured results:
+
+| | What was built | Headline result |
+|---|---|---|
+| **Part 1: retrieval** | Hybrid BM25 + dense + RRF retrieval, then a cross-encoder reranker fine-tuned here | Fine-tuning: +0.048 nDCG@10 over off-the-shelf; hard vs random negatives is an honest **null** (p = 0.81) |
+| **Part 2: the critic (v2)** | [CRITIC-R1](https://arxiv.org/abs/2605.29886) implemented from scratch: SFT, then a two-stage GRPO trainer written by hand, on one 8 GB laptop GPU | Locates the faulty evidence **51.2%** of the time vs **20.3%** chance on 250 fresh held-out questions; beats the untrained model, p = 0.025 |
+
+---
+
+## v2: a critic that says where retrieval went wrong
+
+v1's weakest moment was when its confidence gate fired. It answered "nothing
+answers that", which is honest but gives the user nothing to try next. v2
+attaches a structured diagnosis in CRITIC-R1's format: which retrieved paper let
+the search down, why, and a concrete query to run instead, offered as a one-click
+retry.
+
+```
+<verdict>INCORRECT</verdict><location>search</location>
+<reason>Query too vague; missed standard term "conditional computation" used in sparse expert literature.</reason>
+<fix>search: conditional computation sparse expert networks</fix>
+```
+
+### What training the critic showed
+
+The paper trains one model to do two jobs: decide **whether** an answer is wrong,
+then say **where**. At 1.5B parameters those jobs came apart cleanly.
+
+| Job | Result | |
+|---|---|---|
+| Whether (verdict) | AUC **0.447**, no signal | RL drove the critic to answer CORRECT every time. Given the reward matrix that is the *optimal* policy for a model with no signal: always-CORRECT earns +0.094 per item, always-INCORRECT −0.107. The optimiser did its job; the reward was being maximised honestly. |
+| Where (localisation, verdict supplied) | **2–2.5× chance** | Measured below. |
+
+Localisation benchmark (`scripts/critic_localization.py`). Held-out wrong answers,
+verdict pre-filled, a hit when the critic names one of the two gold HotpotQA
+paragraphs. The fresh set is 250 questions no earlier analysis touched.
+
+| Critic | First 100 | Fresh 250 | 95% CI (fresh) |
+|---|---|---|---|
+| Random guessing | 20.8% | 20.3% | |
+| Qwen2.5-1.5B, untrained | 44.0% | 44.0% | [38.0, 50.2] |
+| + SFT | 40.0% | 48.8% | [42.7, 55.0] |
+| **+ SFT + GRPO** (final checkpoint) | **46.0%** | **51.2%** | [45.0, 57.3] |
+| gpt-oss-20b, no fine-tuning | 14.0% | | right in 82% of the 17 cases where it named a document |
+
+- **SFT + GRPO vs untrained:** 38 vs 20 discordant pairs, exact McNemar p = 0.025.
+- **GRPO vs SFT alone:** ahead on both sets (8–2, 9–3), significant only pooled
+  (p = 0.0075, n = 345, of which 95 overlap the first set). Reported with that caveat.
+- **The API model** usually blames the answer step, which the schema allows but the
+  benchmark doesn't count. A single hit-rate number would have hidden that it is the
+  more precise localiser, so both columns are reported.
+
+### How it runs in production
+
+The architecture follows the measurement. The **gate decides when**: v1's
+mean-of-top-5 reranker confidence already separates in-corpus from out-of-corpus
+queries (0.67–0.996 vs 0.001–0.19). The **diagnosis says where** and is never asked
+to judge. In production it runs on gpt-oss-120b via Groq (about 1 s) rather than the
+1.5B critic (15–30 s on a free CPU Space). The trained critic stays the measured
+research artifact.
+
+Rails, because v2 must never make v1 worse:
+- The diagnosis is parsed with the same strict schema the critic was trained on. A
+  diagnosis citing a document it wasn't shown is suppressed, not displayed.
+- A 6-second budget and a circuit breaker. On any failure the response is exactly v1's.
+- Groq's free tier caps each model at **200K tokens per day**. Answers and diagnoses
+  fall back across models on a daily-cap 429 instead of retrying an exhausted model,
+  and diagnosis is served from a different model's quota than answers so it can't
+  starve them. This was found the hard way: an evaluation exhausted a model's daily
+  budget mid-run.
+
+### Is the gate a good trigger?
+
+`scripts/eval_v2_rescue.py` writes vague, half-remembered queries for 250 random
+corpus papers (a different model family from the diagnoser, forbidden from using
+title words or method names), then checks whether v1 finds the target in its top 10.
+
+| | Queries | v1 recall@10 |
+|---|---|---|
+| All | 250 | 84.8% |
+| Gate confident | 65 | 87.7% |
+| Gate fires | 185 | 83.8% |
+
+On this kind of query the gate is a **weak failure detector**. It fires on 74% of
+vague queries and recall barely differs either side of it. It was calibrated to
+separate on-topic from off-topic queries, and it does that well. It wasn't built to
+tell whether the *one paper you meant* was found. The rescue arm of the same eval
+measures whether following the diagnosis helps or hurts on those 185 queries,
+against a control that rewrites the query with the same model but never sees the
+retrieved documents. That control separates "the critic read what went wrong"
+from "an LLM rephrased the query".
+
+### Code
+
+| | |
+|---|---|
+| `src/critic/` | schema + parser, CJA/DQA rewards (paper Table 7, Eqs 9 and 11), GRPO trainer, SFT, evaluation |
+| `src/api/diagnose.py` | the production diagnosis path and its rails |
+| `scripts/critic_*.py` | trajectory building, supervision, training, evaluation, localisation benchmark |
+| `tests/` | 62 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback |
+
+Deviations from the paper, all deliberate: Qwen2.5-1.5B instead of 3B (one 8 GB
+GPU instead of two A100s); stage 2 trains with the verdict pre-filled because the
+stage-1 verdict never opened the paper's gate; reason/fix rewards are switched off
+where the reference reason is templated rather than teacher-written.
+
+---
+
+## Part 1: the reranker experiment
+
+The retrieval quality comes from a **cross-encoder reranker fine-tuned here**. The
+deliverable is an ablation: the same model, hyperparameters and seed, trained twice
+on datasets that differ **only** in how their negatives were chosen.
 
 ## What the experiment found
 
@@ -377,7 +494,8 @@ src/
   data/        loading, negative mining
   retrieval/   bm25, dense, rrf fusion
   rerank/      training, evaluation, onnx export and runtime
-  api/         fastapi app, pipeline, claude generation, sqlite log
+  critic/      CRITIC-R1: schema, rewards, SFT, GRPO trainer, evaluation
+  api/         fastapi app, pipeline, generation, v2 diagnosis, sqlite log
   ui/          gradio app
 configs/       one yaml per experiment
 results/       metrics.json, latency.json, feedback.db
