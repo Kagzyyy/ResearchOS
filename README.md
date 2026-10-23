@@ -65,9 +65,9 @@ paragraphs. The fresh set is 250 questions no earlier analysis touched.
 ### How it runs in production
 
 The architecture follows the measurement. The **gate decides when**: v1's
-mean-of-top-5 reranker confidence already separates in-corpus from out-of-corpus
-queries (0.67–0.996 vs 0.001–0.19). The **diagnosis says where** and is never asked
-to judge. In production it runs on gpt-oss-120b via Groq (about 1 s) rather than the
+mean-of-top-5 reranker confidence separates answerable from off-topic queries
+(AUC 0.87, calibrated below). The **diagnosis says where** and is never asked to
+judge. In production it runs on gpt-oss-120b via Groq (about 1 s) rather than the
 1.5B critic (15–30 s on a free CPU Space). The trained critic stays the measured
 research artifact.
 
@@ -94,9 +94,26 @@ title words or method names), then checks whether v1 finds the target in its top
 | Gate fires | 185 | 83.8% |
 
 On this kind of query the gate is a **weak failure detector**. It fires on 74% of
-vague queries and recall barely differs either side of it. It was calibrated to
-separate on-topic from off-topic queries, and it does that well. It wasn't built to
-tell whether the *one paper you meant* was found.
+vague queries and recall barely differs either side of it. It separates on-topic
+from off-topic queries, but it can't tell whether the *one paper you meant* was
+found.
+
+That 74% prompted a proper calibration, which found a real v1 bug. The threshold
+(0.35) had been set from a few hand-picked queries. `scripts/calibrate_gate.py`
+measures it on 163 specific questions (answer paper retrieved for **100%** of
+them), the 250 vague ones, and 40 off-topic ones:
+
+| Threshold | Specific pass | Vague pass | Off-topic wrongly passing |
+|---|---|---|---|
+| 0.35 (old) | 51% | 31% | 2.5% |
+| **0.20 (now)** | **94%** | **59%** | 20% |
+| 0.15 | 98% | 68% | 25% |
+
+The old gate refused **half of the answerable specific questions** while the right
+paper sat in the results. 0.20 is a cost choice, not an optimum. A wrongly refused
+good question is worse than an off-topic one let through, because the answer prompt
+still says plainly when the passages don't cover the question. The rescue
+experiment below was run at the old threshold, before this fix.
 
 ### Does following the diagnosis help?
 
@@ -130,6 +147,44 @@ diagnosis that actually raises recall would need a stronger failure trigger than
 the topic-level gate. That's the clearest next step, and this eval is the harness
 to measure it with.
 
+### Measuring v2 with real users
+
+Offline evaluation can only ask whether a target paper ranked. Production logs the
+part it can't see:
+
+- Every query records the diagnosis shown. A query launched from a "Try: …" button
+  carries `retry_of`, the id of the query whose diagnosis suggested it.
+- **`/v2/metrics`** reports the funnel: diagnoses shown → retries taken → retries
+  that led to a paper being opened. It's compared against the click-through of
+  gate-fired queries nobody retried.
+- **`/v2/labels`** exports every "retried, then clicked" pair. Each is a free label
+  saying the original search failed this user and the suggested one worked: the
+  supervision a better failure trigger needs.
+- Monitoring traffic (`scripts/healthcheck.py`) is marked and excluded, so health
+  checks never count as user retries.
+- A free Space's disk is wiped on restart. With `FEEDBACK_REPO` and `HF_TOKEN` set,
+  the feedback DB is restored from a private HF dataset on boot and snapshotted back
+  every 10 minutes (SQLite online backup, so the copy is consistent mid-write).
+
+### Live sources beyond arXiv
+
+When the corpus can't answer, ResearchOS searches **arXiv and OpenAlex in
+parallel** under one shared 5-second budget, merges duplicates by arXiv id or
+title, and rescores everything with the same reranker so one confidence bar governs
+every source. OpenAlex (CC0, ~250M works) covers what arXiv can't: conference and
+journal papers that never had a preprint, and **DOI lookup** for citations. The
+PageRank paper (12,849 citations) was unreachable before; it now ranks first for
+its own description.
+
+OpenAlex meters usage in dollars per day: $0.10 keyless, shared by everything on
+the Space's IP, or $1 with a free key. Every response reports what's left, so the
+client pauses **before** the budget runs out instead of discovering the limit as
+429s. It also has a time budget, a circuit breaker and an LRU cache, like the arXiv
+client. Results are restricted to English computer-science papers: unfiltered, a
+PageRank query ranked a Spanish thesis and a course page above the PageRank paper
+itself. Semantic Scholar was evaluated and left out, because its keyless API refused
+every request.
+
 ### Code
 
 | | |
@@ -137,7 +192,10 @@ to measure it with.
 | `src/critic/` | schema + parser, CJA/DQA rewards (paper Table 7, Eqs 9 and 11), GRPO trainer, SFT, evaluation |
 | `src/api/diagnose.py` | the production diagnosis path and its rails |
 | `scripts/critic_*.py` | trajectory building, supervision, training, evaluation, localisation benchmark |
-| `tests/` | 62 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback |
+| `src/data/openalex_source.py` | second live source: budget-aware, time-bounded, circuit-broken |
+| `src/api/db.py`, `src/api/persist.py` | live v2 funnel, label export, restart-proof feedback |
+| `scripts/calibrate_gate.py` | confidence-gate calibration and retrieval regression check |
+| `tests/` | 87 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback, live sources, title index, v2 funnel |
 
 Deviations from the paper, all deliberate: Qwen2.5-1.5B instead of 3B (one 8 GB
 GPU instead of two A100s); stage 2 trains with the verdict pre-filled because the
