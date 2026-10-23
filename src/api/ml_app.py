@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from src.api import persist
 from src.api.db import FeedbackLog
 from src.api.llm import is_configured
 from src.api.ml_pipeline import MLPipeline
@@ -50,7 +51,9 @@ def build_state() -> None:
     cfg = load_config(CONFIG_PATH)
     state["cfg"] = cfg
     state["pipeline"] = MLPipeline(cfg)
+    persist.restore(cfg["paths"]["feedback_db"])      # before the DB is opened
     state["log"] = FeedbackLog(cfg["paths"]["feedback_db"])
+    persist.start_sync(cfg["paths"]["feedback_db"])
     state["uploads"] = UploadStore(cfg["paths"].get("upload_dir", "cache/uploads"))
 
 
@@ -76,6 +79,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def is_probe(http: Request) -> bool:
+    """Monitoring traffic (scripts/healthcheck.py) is logged but kept out of
+    the v2 metrics - otherwise every health check counts as a user retry."""
+    return http.headers.get("X-ResearchOS-Probe") == "1"
 
 
 class AskRequest(BaseModel):
@@ -158,7 +167,7 @@ def search(request: AskRequest) -> dict[str, Any]:
 
 
 @app.post("/papers")
-def papers(request: PapersRequest) -> dict[str, Any]:
+def papers(request: PapersRequest, http: Request) -> dict[str, Any]:
     """Topic in, ranked papers out (not passages)."""
     pipeline: MLPipeline = state["pipeline"]
     log: FeedbackLog = state["log"]
@@ -180,12 +189,13 @@ def papers(request: PapersRequest) -> dict[str, Any]:
         source=result.get("source"),
         diagnosis=result.get("diagnosis"),
         retry_of=request.retry_of,
+        probe=is_probe(http),
     )
     return {"query_id": query_id, **result}
 
 
 @app.post("/ask")
-def ask(request: AskRequest) -> dict[str, Any]:
+def ask(request: AskRequest, http: Request) -> dict[str, Any]:
     """Question answering, logged."""
     pipeline: MLPipeline = state["pipeline"]
     log: FeedbackLog = state["log"]
@@ -204,12 +214,13 @@ def ask(request: AskRequest) -> dict[str, Any]:
         source=result.get("source"),
         diagnosis=result.get("diagnosis"),
         retry_of=request.retry_of,
+        probe=is_probe(http),
     )
     return {"query_id": query_id, **result}
 
 
 @app.post("/explain")
-def explain(request: ExplainRequest) -> dict[str, Any]:
+def explain(request: ExplainRequest, http: Request) -> dict[str, Any]:
     """Resolve a citation to its paper and explain it in plain terms."""
     pipeline: MLPipeline = state["pipeline"]
     log: FeedbackLog = state["log"]
@@ -259,6 +270,7 @@ def explain(request: ExplainRequest) -> dict[str, Any]:
         source=result.get("source"),
         diagnosis=result.get("diagnosis"),
         retry_of=request.retry_of,
+        probe=is_probe(http),
     )
     return {"query_id": query_id, **result}
 

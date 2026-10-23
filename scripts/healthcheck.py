@@ -33,7 +33,10 @@ class Checks:
 
     def __init__(self, base: str, token: str | None) -> None:
         self.base = base.rstrip("/")
-        self.headers = {"Authorization": f"Bearer {token}"} if token else {}
+        # Marked as monitoring traffic so it never counts in the live v2 metrics.
+        self.headers = {"X-ResearchOS-Probe": "1"}
+        if token:
+            self.headers["Authorization"] = f"Bearer {token}"
         self.results: list[tuple[str, str, str]] = []
 
     def record(self, name: str, status: str, detail: str = "") -> None:
@@ -287,19 +290,19 @@ def main() -> None:
 
     # --- the live v2 funnel: a retry is linked to the query it came from -------
     try:
-        before = checks.get("/v2/metrics")["retries"]
         origin = checks.post("/papers", {"topic": "papers about sparse experts", "top_k": 3})
         retry = checks.post("/papers", {"topic": "mixture of experts routing", "top_k": 3,
                                         "retry_of": origin["query_id"]})
         checks.post("/feedback/click",
                     {"query_id": retry["query_id"], "doc_id": retry["papers"][0]["doc_id"]})
         metrics = checks.get("/v2/metrics")
-        labels = checks.get("/v2/labels?limit=5")
-        ok = metrics["retries"] == before + 1 and any(
-            row["retry_id"] == retry["query_id"] for row in labels["labels"])
-        checks.record("v2 retry funnel is recorded", PASS if ok else FAIL,
-                      f"{metrics['retries']} retries, click-through "
-                      f"{metrics['retry_click_through']}, {labels['count']} labels")
+        labels = checks.get("/v2/labels?limit=50")
+        # This check's own retry is a probe: it must NOT appear in user labels.
+        leaked = any(row["retry_id"] == retry["query_id"] for row in labels["labels"])
+        checks.record("v2 funnel live, probes excluded", PASS if not leaked else FAIL,
+                      f"{metrics['retries']} user retries, click-through "
+                      f"{metrics['retry_click_through']}, {labels['count']} labels"
+                      + (" - probe traffic leaked into metrics" if leaked else ""))
     except Exception as exc:  # noqa: BLE001
         checks.record("v2 retry funnel is recorded", FAIL, f"{type(exc).__name__}: {exc}")
 

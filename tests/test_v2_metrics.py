@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from contextlib import closing
 import tempfile
 from pathlib import Path
 
@@ -81,6 +82,66 @@ def test_old_database_is_migrated_in_place():
     log = FeedbackLog(str(path))
     _q(log, "q", False, DIAG)
     assert log.v2_metrics()["diagnoses_shown"] == 1
+
+
+def test_probe_traffic_is_excluded_from_metrics_and_labels():
+    log = _log()
+    a = log.log_query(query="hc", answer=None, latency_ms=1.0, backend="x", citations=[],
+                      confident=False, diagnosis=DIAG, probe=True)
+    r = log.log_query(query="hc retry", answer=None, latency_ms=1.0, backend="x",
+                      citations=[], confident=True, retry_of=a, probe=True)
+    log.log_click(r, "d")
+    m = log.v2_metrics()
+    assert m["diagnoses_shown"] == 0 and m["retries"] == 0 and m["baseline_queries"] == 0
+    assert log.v2_labels() == []
+
+
+def test_snapshot_round_trip_and_skips_unchanged():
+    """persist: a consistent copy goes up only when the database changed."""
+    import src.api.persist as persist
+
+    log = _log()
+    _q(log, "q", False, DIAG)
+    uploads = []
+
+    class FakeApi:
+        def __init__(self, token=None):
+            pass
+
+        def create_repo(self, *a, **k):
+            pass
+
+        def upload_file(self, path_or_fileobj, **k):
+            with closing(sqlite3.connect(path_or_fileobj)) as conn:   # a valid DB
+                uploads.append(conn.execute("SELECT COUNT(*) FROM queries").fetchone()[0])
+
+    import huggingface_hub
+    saved = huggingface_hub.HfApi
+    huggingface_hub.HfApi = FakeApi
+    try:
+        fp = persist.snapshot_once(str(log.path), "me/fb", "tok", None)
+        assert uploads == [1]
+        assert persist.snapshot_once(str(log.path), "me/fb", "tok", fp) == fp
+        assert uploads == [1], "unchanged database must not be re-uploaded"
+        _q(log, "q2", False, DIAG)
+        persist.snapshot_once(str(log.path), "me/fb", "tok", fp)
+        assert uploads == [1, 2]
+    finally:
+        huggingface_hub.HfApi = saved
+
+
+def test_persistence_is_off_without_secrets():
+    import os
+
+    import src.api.persist as persist
+    saved = {k: os.environ.pop(k, None) for k in ("FEEDBACK_REPO", "HF_TOKEN")}
+    try:
+        assert persist.start_sync("x.db") is None
+        assert persist.restore("x.db") is False
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
 
 
 def test_empty_database_reports_no_rates():
