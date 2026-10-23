@@ -142,6 +142,7 @@ footer { padding-block: 36px 0; color: var(--muted); font-size: 0.9rem; }
     <li><span class="n">10</span><a href="#vram">Living inside 8 GB</a></li>
     <li><span class="n">11</span><a href="#statistics">Measuring it honestly</a></li>
     <li><span class="n">12</span><a href="#product">From research artifact to product</a></li>
+    <li><span class="n">13</span><a href="#threshold">Calibrating a decision threshold</a></li>
   </ol>
 </nav>
 
@@ -471,6 +472,43 @@ AUC (does the score rank wrong answers above right ones?):
       </table></div>
       <div class="held"><span class="label">What the numbers support</span>Following the diagnosis is net zero on recall: 9 rescued, 9 lost. It isn't a recall improvement. It is clearly safer than rewriting blind, which loses 22 correct results to rescue 11 (v2 against control 21 to 10, exact McNemar p = 0.07). So v1's results are always shown first, and the suggestion is an opt-in button. Without the control arm, "v2 rescued 9 failed searches" would have read like a win. With it, the same data says the rescues are about what any rewrite gets, and the real contribution is avoiding harm.</div>
     </div>
+  </div>
+</article>
+
+<!-- 13 -->
+<article class="entry" id="threshold">
+  <aside class="margin">
+    <span class="num">Entry 13</span>
+    <span class="concept">ROC &middot; AUC &middot; Youden's J &middot; Cost-sensitive thresholds</span>
+    <div class="stat fail"><div class="v">49%</div><div class="k">of answerable questions the old threshold refused, with the right paper already retrieved</div></div>
+  </aside>
+  <div class="main">
+    <h2>Calibrating a decision threshold</h2>
+    <p>v1's confidence gate turns a score (the mean of the top five reranker scores) into a yes/no: answer, or say that nothing in the corpus covers this. Its threshold of 0.35 had been set by looking at a handful of queries. When v2's trigger fired on 74% of vague queries, I measured the gate properly on three groups: 163 specific questions written from corpus papers, 250 vague ones, and 40 off-topic ones.</p>
+    <p>Every threshold is a pair of error rates. Sweeping it traces the ROC curve: the true positive rate (answerable questions passed) against the false positive rate (off-topic questions passed).</p>
+    <pre class="math">TPR(t) = P(score &ge; t | answerable)       FPR(t) = P(score &ge; t | off-topic)
+
+AUC = P(score of a random answerable question &gt; score of a random off-topic one)
+    measured: 0.87  (specific questions alone: 0.93)
+
+Youden's J(t) = TPR(t) - FPR(t)          the threshold furthest from the diagonal
+    measured best: t = 0.112, J = 0.60</pre>
+    <div class="tablewrap"><table>
+      <thead><tr><th>threshold</th><th>specific pass</th><th>vague pass</th><th>off-topic pass</th></tr></thead>
+      <tbody>
+        <tr><td class="n">0.35 (old)</td><td class="n">51%</td><td class="n">31%</td><td class="n">2.5%</td></tr>
+        <tr class="hl"><td class="n">0.20 (chosen)</td><td class="n">94%</td><td class="n">59%</td><td class="n">20%</td></tr>
+        <tr><td class="n">0.112 (Youden)</td><td class="n">99%</td><td class="n">76%</td><td class="n">25%</td></tr>
+      </tbody>
+    </table></div>
+    <p>Youden's J assumes both errors cost the same, and they rarely do. The right threshold minimises expected cost, which depends on how often each kind of query arrives and what each mistake costs:</p>
+    <pre class="math">t* = argmin_t   c_FN &middot; P(answerable) &middot; (1 - TPR(t))   +   c_FP &middot; P(off-topic) &middot; FPR(t)
+
+here: off-topic queries are rare on an AI paper search, and an off-topic one that
+slips through still meets an answer prompt told to say "these passages do not
+cover that" - so c_FN &gt; c_FP and P(answerable) &gt;&gt; P(off-topic), pushing t down</pre>
+    <div class="broke"><span class="label">What broke</span>The old threshold refused half of the specific questions while the paper that answered each one was in its top ten (recall@10 = 100%). The config comment claimed answerable queries score 0.67&ndash;0.996. That was true of the few queries it was read from, and of almost nothing else. A threshold set by eye is a guess about a distribution nobody measured.</div>
+    <div class="held"><span class="label">The lesson</span>Report the whole trade-off curve, choose a point on it from the costs of each error, and re-measure whenever the data changes. A 35&times; larger corpus changes what "confident" means, so the calibration script runs again before that corpus ships.</div>
   </div>
 </article>
 
