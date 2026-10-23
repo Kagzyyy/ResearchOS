@@ -41,17 +41,29 @@ class Checks:
         mark = {PASS: "  ok  ", FAIL: " FAIL ", SKIP: " skip "}[status]
         print(f"[{mark}] {name}" + (f"  - {detail}" if detail else ""))
 
-    def get(self, path: str, timeout: float = 30.0) -> Any:
-        response = httpx.get(f"{self.base}{path}", headers=self.headers, timeout=timeout)
+    def _send(self, method: str, path: str, **kw: Any) -> Any:
+        """One request, waiting out the server's own rate limiter.
+
+        The backend allows N requests a minute per client, and a full check
+        makes more than that. A 429 here is the limiter working, not a fault,
+        so the check honours Retry-After instead of reporting a failure.
+        """
+        for _ in range(3):
+            response = httpx.request(method, f"{self.base}{path}",
+                                     headers=self.headers, **kw)
+            if response.status_code != 429:
+                break
+            wait = float(response.headers.get("Retry-After", "10"))
+            print(f"         (rate limited by the backend; waiting {wait:.0f}s)")
+            time.sleep(min(wait, 65.0))
         response.raise_for_status()
         return response.json()
 
+    def get(self, path: str, timeout: float = 30.0) -> Any:
+        return self._send("GET", path, timeout=timeout)
+
     def post(self, path: str, body: dict[str, Any], timeout: float = 240.0) -> Any:
-        response = httpx.post(
-            f"{self.base}{path}", json=body, headers=self.headers, timeout=timeout
-        )
-        response.raise_for_status()
-        return response.json()
+        return self._send("POST", path, json=body, timeout=timeout)
 
 
 def main() -> None:
@@ -167,6 +179,26 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             checks.record(label, FAIL, f"{type(exc).__name__}: {exc}")
 
+    # --- a DOI-only paper: the reason OpenAlex is a live source ---------------
+    sources = health.get("live_sources", {})
+    if not sources:
+        checks.record("live sources reported", FAIL, "health has no live_sources - old backend?")
+    else:
+        checks.record("live sources reported", PASS, ", ".join(
+            f"{k} {'up' if v.get('available') else 'paused'}" for k, v in sources.items()))
+    if not sources.get("openalex", {}).get("available"):
+        checks.record("citation by DOI (no arXiv copy)", SKIP, "OpenAlex paused or absent")
+    else:
+        try:
+            result = checks.post("/explain", {"citation": "10.1145/3292500.3330701",
+                                              "generate": False})
+            title = (result.get("paper") or {}).get("title", "")
+            checks.record("citation by DOI (no arXiv copy)",
+                          PASS if "optuna" in title.lower() else FAIL,
+                          f"resolved to {title[:50]!r} via {result.get('method')}")
+        except Exception as exc:  # noqa: BLE001
+            checks.record("citation by DOI (no arXiv copy)", FAIL, f"{type(exc).__name__}: {exc}")
+
     # --- a question must not be resolved as a paper title -----------------
     try:
         result = checks.post(
@@ -252,6 +284,24 @@ def main() -> None:
         )
     except Exception as exc:  # noqa: BLE001
         checks.record("feedback is recorded", FAIL, f"{type(exc).__name__}: {exc}")
+
+    # --- the live v2 funnel: a retry is linked to the query it came from -------
+    try:
+        before = checks.get("/v2/metrics")["retries"]
+        origin = checks.post("/papers", {"topic": "papers about sparse experts", "top_k": 3})
+        retry = checks.post("/papers", {"topic": "mixture of experts routing", "top_k": 3,
+                                        "retry_of": origin["query_id"]})
+        checks.post("/feedback/click",
+                    {"query_id": retry["query_id"], "doc_id": retry["papers"][0]["doc_id"]})
+        metrics = checks.get("/v2/metrics")
+        labels = checks.get("/v2/labels?limit=5")
+        ok = metrics["retries"] == before + 1 and any(
+            row["retry_id"] == retry["query_id"] for row in labels["labels"])
+        checks.record("v2 retry funnel is recorded", PASS if ok else FAIL,
+                      f"{metrics['retries']} retries, click-through "
+                      f"{metrics['retry_click_through']}, {labels['count']} labels")
+    except Exception as exc:  # noqa: BLE001
+        checks.record("v2 retry funnel is recorded", FAIL, f"{type(exc).__name__}: {exc}")
 
     # --- anything the server logged as an error ---------------------------
     try:

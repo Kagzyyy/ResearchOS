@@ -38,6 +38,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from src.api.diagnose import diagnose
@@ -46,14 +47,27 @@ from src.config import device
 from src.data.arxiv_source import (
     ArxivUnavailable, Paper, fetch_metadata_bounded, read_papers,
 )
+from src.data import openalex_source as openalex
 from src.data.chunking import chunk_paper, chunks_to_corpus, read_chunks
-from src.data.citation import looks_like_a_question, resolve
+from src.data.citation import looks_like_a_question, paper_url, resolve
 from src.retrieval.bm25 import BM25Retriever
 from src.retrieval.dense import DenseRetriever
 from src.retrieval.diversify import cap_per_paper, distinct_papers
 from src.retrieval.fusion import reciprocal_rank_fusion
 
 PSEUDO_QID = "q"
+
+# Live sources run side by side under one deadline; their own clients bound
+# each call, so this pool only has to hold the two waits of one request.
+_LIVE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="live-search")
+
+
+def _dedup_key(item: dict[str, Any]) -> str:
+    """arXiv id when known, else a normalised title: one paper, one entry."""
+    pid = item.get("paper_id") or ""
+    if pid and not pid.startswith("openalex:"):
+        return pid
+    return re.sub(r"[^a-z0-9]", "", (item.get("title") or "").lower())[:120]
 
 _QUERY_STOPWORDS = {
     "the", "and", "for", "with", "from", "what", "how", "why", "does", "explain",
@@ -249,7 +263,7 @@ class MLPipeline:
         source = "corpus"
         ac = self.cfg["answer"]
         if not confident and self.cfg["citation"].get("allow_remote", True):
-            live = self.search_arxiv_live(topic, top_k=top_k)
+            live = self.search_live(topic, top_k=top_k)
             if live:
                 live = self._rescore_live(topic, live)
                 floor = ac.get("live_min_score", 0.30)
@@ -261,11 +275,14 @@ class MLPipeline:
                             "paper_id": p["paper_id"],
                             "doc_id": p["doc_id"],
                             "title": p["title"],
-                            "authors": [],
+                            "authors": p.get("authors", []),
                             "abstract": p["text"],
                             "published": p["published"],
                             "primary_category": "",
                             "arxiv_url": p["arxiv_url"],
+                            "venue": p.get("venue", ""),
+                            "cited_by_count": p.get("cited_by_count"),
+                            "live_source": p.get("live_source", "arxiv"),
                             "score": round(p["score"], 4),
                             "matched_passages": 1,
                             "matched_sections": ["abstract"],
@@ -278,7 +295,10 @@ class MLPipeline:
                         if p["paper_id"] not in seen
                     ]
                     if fetched:
-                        papers = (fetched + papers)[:top_k]
+                        # Corpus papers only fill remaining slots if they clear
+                        # the same bar - otherwise a 0.08 match sat under a
+                        # result labelled confident.
+                        papers = (fetched + [p for p in papers if p["score"] >= floor])[:top_k]
                         source = "arxiv_live"
                         confident = True
                         mean_top = sum(p["score"] for p in fetched) / len(fetched)
@@ -387,29 +407,69 @@ class MLPipeline:
             },
         }
 
-    # ------------------------------------------------------- live arxiv search
+    # ------------------------------------------------------------ live search
 
-    def search_arxiv_live(self, question: str, top_k: int = 6) -> list[dict[str, Any]]:
-        """Search arXiv directly, for questions the local corpus cannot answer.
+    def search_live(self, question: str, top_k: int = 6) -> list[dict[str, Any]]:
+        """Search arXiv and OpenAlex live, for questions the corpus cannot answer.
 
         The corpus is a sample, not coverage: ~1,400 papers per category across
         nine months, against the 50-150/day arXiv actually publishes. Most
         papers a user asks about were never ingested, and telling them "not in
         this corpus" is honest but useless when the paper plainly exists.
 
-        Abstracts only - no PDF fetch. Bounded by `citation.live_budget_s`
-        (default 5s) of wall-clock across both queries: this is an optional
-        enrichment, so when arXiv is slow the answer goes out from the corpus
-        rather than waiting. Uses the breaker shared with citation lookup, so
-        once arXiv throttles one of them, neither keeps asking.
+        Two sources, because each misses what the other has. arXiv is the
+        freshest for preprints; OpenAlex adds conference and journal papers
+        that never had one. Both run in parallel under ONE wall-clock budget
+        (`citation.live_budget_s`), so adding a source never adds latency:
+        whatever has answered when the budget expires is used, and a source
+        that is down or paused costs nothing. The same paper found by both
+        collapses to one entry, keyed on its arXiv id or normalised title.
+
+        Abstracts only - no PDF fetch. Results are rescored by the corpus
+        reranker afterwards, so one confidence bar governs every source.
         """
+        sources = self.cfg["citation"].get("live_sources", ["arxiv", "openalex"])
+        budget = float(self.cfg["citation"].get("live_budget_s", 5.0))
+        deadline = time.monotonic() + budget
+        jobs = {}
+        if "arxiv" in sources:
+            jobs["arxiv"] = _LIVE_POOL.submit(self._live_arxiv, question, top_k, deadline)
+        if "openalex" in sources:
+            jobs["openalex"] = _LIVE_POOL.submit(self._live_openalex, question, top_k, deadline)
+
+        found: dict[str, list[dict[str, Any]]] = {}
+        for name, job in jobs.items():
+            try:
+                found[name] = job.result(timeout=max(deadline - time.monotonic(), 0.05))
+            except Exception:  # noqa: BLE001 - a failed source is an empty source
+                found[name] = []
+
+        merged: list[dict[str, Any]] = []
+        seen: dict[str, dict[str, Any]] = {}
+        # arXiv first: on a duplicate, its record wins (fresher version), and
+        # OpenAlex contributes the venue and citation count it lacks.
+        for name in ("arxiv", "openalex"):
+            for item in found.get(name, []):
+                key = _dedup_key(item)
+                if key in seen:
+                    kept = seen[key]
+                    kept["venue"] = kept.get("venue") or item.get("venue", "")
+                    kept["cited_by_count"] = max(kept.get("cited_by_count") or 0,
+                                                 item.get("cited_by_count") or 0)
+                    kept["live_source"] = "arxiv+openalex"
+                    continue
+                seen[key] = item
+                merged.append(item)
+        return merged
+
+    # Kept for callers that predate OpenAlex.
+    search_arxiv_live = search_live
+
+    def _live_arxiv(self, question: str, top_k: int, deadline: float) -> list[dict[str, Any]]:
         terms = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", question)
                  if w.lower() not in _QUERY_STOPWORDS][:12]
         if not terms:
             return []
-
-        budget = float(self.cfg["citation"].get("live_budget_s", 5.0))
-        deadline = time.monotonic() + budget
         queries = [
             "all:" + " AND ".join(f'"{t}"' for t in terms[:4]),  # precise first
             "all:" + " ".join(terms[:8]),                         # then looser
@@ -426,7 +486,6 @@ class MLPipeline:
                 return []  # a failed enrichment is not a failed request
             if found:
                 break
-
         return [
             {
                 "chunk_id": f"live:{p.paper_id}",
@@ -438,8 +497,42 @@ class MLPipeline:
                 "section": "abstract",
                 "published": p.published,
                 "text": p.abstract,
+                "authors": p.authors[:8],
+                "venue": "arXiv",
+                "cited_by_count": None,
+                "live_source": "arxiv",
             }
             for p in found
+        ]
+
+    def _live_openalex(self, question: str, top_k: int, deadline: float) -> list[dict[str, Any]]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.25:
+            return []
+        try:
+            works = openalex.search_works(question, max_results=top_k, budget_s=remaining)
+        except openalex.OpenAlexUnavailable:
+            return []
+        return [
+            {
+                "chunk_id": f"live:{w['paper_id']}",
+                "doc_id": f"live:{w['paper_id']}",
+                "paper_id": w["paper_id"],
+                # Named arxiv_url for compatibility with every client; for a
+                # paper with no arXiv copy it is the DOI or landing page.
+                "arxiv_url": w["url"],
+                "score": 1.0,
+                "title": w["title"],
+                "section": "abstract",
+                "published": w["published"],
+                "text": w["abstract"],
+                "authors": w["authors"][:8],
+                "venue": w["venue"],
+                "cited_by_count": w["cited_by_count"],
+                "doi": w["doi"],
+                "live_source": "openalex",
+            }
+            for w in works
         ]
 
     # ------------------------------------------------------------------- ask
@@ -478,7 +571,7 @@ class MLPipeline:
         live_ms = 0.0
         if remote_ok and (not confident or mean_top < enrich_below):
             live_start = time.perf_counter()
-            live = self.search_arxiv_live(question)
+            live = self.search_live(question)
             live_ms = (time.perf_counter() - live_start) * 1000.0
             if live:
                 # arXiv always returns *something*, so live results must clear
@@ -588,7 +681,7 @@ class MLPipeline:
                 "chunk_id": c.chunk_id,
                 "doc_id": c.chunk_id,
                 "paper_id": c.paper_id,
-                "arxiv_url": f"https://arxiv.org/abs/{c.paper_id}",
+                "arxiv_url": paper_url(paper),
                 "score": 1.0,
                 "title": c.title,
                 "section": c.section,
@@ -700,7 +793,9 @@ class MLPipeline:
                 "authors": paper.authors[:8],
                 "published": paper.published,
                 "primary_category": paper.primary_category,
-                "arxiv_url": f"https://arxiv.org/abs/{paper.paper_id}",
+                "arxiv_url": paper_url(paper),
+                "venue": (paper.metadata or {}).get("venue", ""),
+                "doi": (paper.metadata or {}).get("doi", ""),
                 "has_full_text": bool(paper.full_text),
             },
             "explanation": explanation,

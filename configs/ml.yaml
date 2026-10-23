@@ -105,6 +105,10 @@ citation:
   # shared IPs (Hugging Face Spaces) and a throttled call can hang ~50s before
   # failing; past this budget the answer goes out from the corpus instead.
   live_budget_s: 5.0
+  # Queried in parallel under the one budget above. OpenAlex adds the
+  # conference/journal papers with no arXiv preprint, plus DOI lookup; set
+  # OPENALEX_API_KEY for a 10x daily budget (keyless works, ~100 searches/day).
+  live_sources: [arxiv, openalex]
   fetch_full_text: true     # download the PDF for on-demand papers
   # Cap the on-demand PDF cache. Citation lookup downloads one PDF per
   # unresolved paper, which grows without bound on a shared deployment.

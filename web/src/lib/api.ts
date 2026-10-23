@@ -111,7 +111,11 @@ export interface PaperHit {
   why: string;
   why_section: string;
   has_full_text: boolean;
+  /** Fetched live rather than from the index (any source, despite the name). */
   from_arxiv?: boolean;
+  live_source?: "arxiv" | "openalex" | "arxiv+openalex";
+  venue?: string;
+  cited_by_count?: number | null;
 }
 
 export interface PapersResult {
@@ -135,6 +139,7 @@ export interface Health {
   generation_enabled: boolean;
   auth_required?: boolean;
   rate_limit_per_minute?: number;
+  live_sources?: Record<string, { available: boolean; remaining_usd?: number | null }>;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
@@ -152,18 +157,34 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const findPapers = (topic: string, topK = 10) =>
-  post<PapersResult>("/papers", { topic, top_k: topK });
+/**
+ * `retryOf` is the query_id whose v2 diagnosis suggested this query. It is
+ * what lets the backend measure whether following a suggestion helps.
+ */
+export const findPapers = (topic: string, topK = 10, retryOf: number | null = null) =>
+  post<PapersResult>("/papers", { topic, top_k: topK, retry_of: retryOf });
 
-export const ask = (query: string, topK = 6) =>
-  post<AskResult>("/ask", { query, top_k: topK, generate: true });
+export const ask = (query: string, topK = 6, retryOf: number | null = null) =>
+  post<AskResult>("/ask", { query, top_k: topK, generate: true, retry_of: retryOf });
 
-export const explain = (citation: string, documentId?: string | null) =>
+export const explain = (
+  citation: string,
+  documentId?: string | null,
+  retryOf: number | null = null,
+) =>
   post<ExplainResult>("/explain", {
     citation,
     generate: true,
     document_id: documentId ?? null,
+    retry_of: retryOf,
   });
+
+/** Where a paper link actually goes, for its label. */
+export function linkLabel(url: string): string {
+  if (/arxiv\.org/i.test(url)) return "arXiv";
+  if (/doi\.org/i.test(url)) return "DOI";
+  return "source";
+}
 
 export interface UploadedDoc {
   document_id: string;

@@ -6,13 +6,14 @@ The use case: you are reading a paper, you hit "...following [23] (Assran et al.
 Accepted inputs, in the order they are tried:
 
   arXiv id       2301.08243, arXiv:2301.08243v2, https://arxiv.org/abs/2301.08243
+  DOI            10.1109/CVPR.2016.90, https://doi.org/10.1109/CVPR.2016.90
   bracketed ref  [23] M. Assran et al. "Self-Supervised Learning from Images..."
   bare title     Self-Supervised Learning from Images with a Joint-Embedding...
 
-Resolution is local-first: the ingested corpus is checked before arXiv is
-called, because most of what you are reading about is already indexed. Anything
-not found locally is fetched on demand, so the tool is not limited to the
-corpus snapshot.
+Resolution is local-first: the ingested corpus is checked before any network
+call, because most of what you are reading about is already indexed. Anything
+not found locally is fetched on demand - arXiv first, then OpenAlex, which
+covers the conference and journal papers that never had an arXiv preprint.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from src.data import openalex_source as openalex
 from src.data.arxiv_source import (
     ArxivUnavailable, Paper, download_pdf, extract_text, fetch_metadata_bounded,
 )
@@ -57,12 +59,52 @@ def _safe_fetch(query: str, max_results: int) -> list[Paper]:
         return []
 
 
+def _paper_from_openalex(work: dict[str, Any]) -> Paper:
+    """An OpenAlex work in the Paper shape the rest of the pipeline expects."""
+    arxiv_id = work.get("arxiv_id")
+    return Paper(
+        paper_id=work["paper_id"],
+        version=1,
+        title=work["title"],
+        abstract=work["abstract"],
+        authors=work["authors"],
+        categories=[],
+        primary_category=work.get("venue", ""),
+        published=work.get("published", ""),
+        updated="",
+        # Only arXiv PDFs are ever fetched on the request path: a known host
+        # with stable, polite access. Other open-access PDFs are linked, not
+        # downloaded.
+        pdf_url=f"https://arxiv.org/pdf/{arxiv_id}" if arxiv_id else "",
+        metadata={
+            "source": "openalex",
+            "url": work.get("url", ""),
+            "venue": work.get("venue", ""),
+            "doi": work.get("doi") or "",
+            "cited_by_count": str(work.get("cited_by_count", 0)),
+        },
+    )
+
+
+def _safe_openalex(fn, *args) -> Any:
+    try:
+        return fn(*args)
+    except openalex.OpenAlexUnavailable as exc:
+        print(f"[openalex] lookup skipped ({exc}); degrading")
+        return None
+
+
+def paper_url(paper: Paper) -> str:
+    """Where a reader should go for this paper, whichever source it came from."""
+    return (paper.metadata or {}).get("url") or f"https://arxiv.org/abs/{paper.paper_id}"
+
+
 @dataclass
 class Resolution:
     """What a citation string resolved to, and how."""
 
     paper: Paper | None
-    method: str  # arxiv_id | local_title | arxiv_search | unresolved
+    method: str  # arxiv_id | doi | local_title | arxiv_search | openalex_title | unresolved
     query_used: str
     from_corpus: bool
     candidates: list[dict[str, str]]
@@ -77,13 +119,14 @@ QUESTION_STARTS = (
 # What a citation actually looks like. Anything matching one of these is worth
 # the cost of resolution; nothing else is.
 _CITATION_SHAPES = (
-    re.compile(r"et\s+al", re.IGNORECASE),          # Assran et al.
+    re.compile(r"\bet\s+al\b", re.IGNORECASE),          # Assran et al.
     re.compile(r"^\s*[\[\(]\d{1,3}[\]\)]"),              # [23] or (23)
     re.compile(r"^\s*\d{1,3}\.\s+[A-Z]"),                # 23. Author
     re.compile(r"\((?:19|20)\d{2}\)"),                   # (2023)
-    re.compile(r",\s*(?:19|20)\d{2}"),                 # , 2023
-    re.compile(r"(?:CVPR|NeurIPS|ICML|ICLR|ACL|EMNLP|AAAI|SIGGRAPH)"),
-    re.compile(r"arxiv", re.IGNORECASE),
+    re.compile(r",\s*(?:19|20)\d{2}\b"),                 # , 2023
+    re.compile(r"\b(?:CVPR|NeurIPS|ICML|ICLR|ACL|EMNLP|AAAI|SIGGRAPH)\b"),
+    re.compile(r"\barxiv\b", re.IGNORECASE),
+    re.compile(r"\b10\.\d{4,9}/\S+"),                    # a DOI
     re.compile(r"[\"“‘']([^\"”’']{15,})[\"”’']"),  # a quoted title
 )
 
@@ -244,8 +287,13 @@ def resolve(
     if not raw:
         return Resolution(None, "unresolved", "", False, [])
 
+    # A DOI's digits can look like an arXiv id ("10.1145/3292500.3330701"
+    # contains "2500.33307"), so a non-arXiv DOI takes precedence over it.
+    doi = openalex.extract_doi(raw)
+    arxiv_doi = bool(doi and doi.startswith("10.48550/arxiv."))
+
     # --- 1. explicit arXiv id ---
-    arxiv_id = extract_arxiv_id(raw)
+    arxiv_id = extract_arxiv_id(raw) if (not doi or arxiv_doi) else None
     if arxiv_id:
         local = papers_by_id.get(arxiv_id)
         if local:
@@ -257,6 +305,17 @@ def resolve(
                 if fetch_full_text:
                     _attach_text(paper, pdf_dir, text_dir, max_cache_gb)
                 return Resolution(paper, "arxiv_id", arxiv_id, False, [])
+
+    # --- 1b. DOI: conference and journal papers arXiv does not know ---
+    if doi and not arxiv_doi and allow_remote:
+        work = _safe_openalex(openalex.get_by_doi, doi)
+        if work and work.get("title"):
+            if work.get("arxiv_id") and work["arxiv_id"] in papers_by_id:
+                return Resolution(Paper(**papers_by_id[work["arxiv_id"]]), "doi", doi, True, [])
+            paper = _paper_from_openalex(work)
+            if fetch_full_text and paper.pdf_url:
+                _attach_text(paper, pdf_dir, text_dir, max_cache_gb)
+            return Resolution(paper, "doi", doi, False, [])
 
     # --- 2. title match against the local corpus ---
     title_query = clean_citation(raw)
@@ -280,6 +339,23 @@ def resolve(
                 {"paper_id": p.paper_id, "title": p.title, "score": f"{_token_overlap(title_query, p.title):.2f}"}
                 for p in found
             ] + candidates
+
+    # --- 4. ask OpenAlex: the paper may simply never have been on arXiv ---
+    if allow_remote and title_query:
+        works = _safe_openalex(openalex.search_title, title_query, 8) or []
+        if works:
+            best = max(works, key=lambda w: _token_overlap(title_query, w["title"]))
+            overlap = _token_overlap(title_query, best["title"])
+            if overlap >= 0.6 and best.get("abstract"):
+                paper = _paper_from_openalex(best)
+                if fetch_full_text and paper.pdf_url:
+                    _attach_text(paper, pdf_dir, text_dir, max_cache_gb)
+                return Resolution(paper, "openalex_title", title_query, False, candidates)
+            candidates = candidates + [
+                {"paper_id": w["paper_id"], "title": w["title"],
+                 "score": f"{_token_overlap(title_query, w['title']):.2f}"}
+                for w in works[:3]
+            ]
 
     return Resolution(None, "unresolved", title_query, False, candidates[:5])
 

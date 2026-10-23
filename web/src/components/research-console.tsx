@@ -24,6 +24,7 @@ import {
   findPapers,
   health,
   IS_MISCONFIGURED,
+  linkLabel,
   logClick,
   uploadPdf,
   vote,
@@ -107,7 +108,7 @@ export function ResearchConsole() {
     setError(null);
   }
 
-  async function run(value?: string) {
+  async function run(value?: string, retryOf: number | null = null) {
     const text = (value ?? input).trim();
     if (text.length < 3 || loading) return;
     setInput(text);
@@ -116,11 +117,11 @@ export function ResearchConsole() {
     try {
       let summary = "";
       if (mode === "papers") {
-        const res = await findPapers(text);
+        const res = await findPapers(text, 10, retryOf);
         setPapersResult(res);
         summary = `${res.papers.length} papers`;
       } else {
-        const res = await explain(text, doc?.document_id);
+        const res = await explain(text, doc?.document_id, retryOf);
         if (res.resolved) {
           setExplainResult(res);
           summary = res.paper?.title ?? "explained";
@@ -129,7 +130,7 @@ export function ResearchConsole() {
           // than calling /ask, which re-ran the whole pipeline a second time.
           const answered = res.answer_result
             ? { ...res.answer_result, query_id: res.query_id }
-            : await ask(text);
+            : await ask(text, 6, retryOf);
           setAskResult(answered);
           summary = `${answered.distinct_papers} papers`;
         }
@@ -365,11 +366,11 @@ export function ResearchConsole() {
       )}
 
       {!loading && papersResult && (
-        <PapersView result={papersResult} queryId={queryId} onRetry={(q) => run(q)} />
+        <PapersView result={papersResult} queryId={queryId} onRetry={(q) => run(q, queryId)} />
       )}
       {!loading && explainResult && <ExplainView result={explainResult} queryId={queryId} />}
       {!loading && askResult && (
-        <AskView result={askResult} queryId={queryId} onRetry={(q) => run(q)} />
+        <AskView result={askResult} queryId={queryId} onRetry={(q) => run(q, queryId)} />
       )}
     </section>
   );
@@ -604,9 +605,10 @@ function PapersView({
     <div className="mt-8 space-y-6">
       {result.diagnosis && <DiagnosisPanel diagnosis={result.diagnosis} onRetry={onRetry} />}
       {result.source === "arxiv_live" && (
-        <Callout tone="amber" title="Not in the local corpus — fetched live from arXiv">
-          The indexed sample does not cover this topic, so these came straight from the
-          arXiv API. Abstracts only, so no full-text passages.
+        <Callout tone="amber" title="Not in the local corpus — fetched live">
+          The indexed sample does not cover this topic, so these came straight from arXiv
+          and OpenAlex, rescored by the same reranker. Abstracts only, so no full-text
+          passages.
         </Callout>
       )}
       {!result.confident && result.source !== "arxiv_live" && (
@@ -638,7 +640,13 @@ function PapersView({
           byline: [
             p.authors.slice(0, 3).join(", ") + (p.authors.length > 3 ? " et al." : ""),
             p.published,
-            p.primary_category,
+            p.venue && p.venue !== "arXiv" ? p.venue : p.primary_category,
+            typeof p.cited_by_count === "number" && p.cited_by_count > 0
+              ? `${p.cited_by_count.toLocaleString()} citations`
+              : "",
+            p.from_arxiv
+              ? `live · ${p.live_source === "openalex" ? "OpenAlex" : p.live_source === "arxiv+openalex" ? "arXiv + OpenAlex" : "arXiv"}`
+              : "",
           ]
             .filter(Boolean)
             .join(" · "),
@@ -711,7 +719,16 @@ function PaperCard({
             )}
             {paper.from_arxiv && (
               <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-sky-300">
-                live from arXiv
+                live · {paper.live_source === "openalex" ? "OpenAlex"
+                  : paper.live_source === "arxiv+openalex" ? "arXiv + OpenAlex" : "arXiv"}
+              </span>
+            )}
+            {paper.venue && paper.venue !== "arXiv" && (
+              <span className="text-slate-500">{paper.venue}</span>
+            )}
+            {typeof paper.cited_by_count === "number" && paper.cited_by_count > 0 && (
+              <span className="text-slate-500">
+                {paper.cited_by_count.toLocaleString()} citations
               </span>
             )}
           </span>
@@ -738,7 +755,7 @@ function PaperCard({
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-sky-400 hover:underline"
           >
-            {paper.paper_id} on arXiv <ArrowUpRight size={12} />
+            Open on {linkLabel(paper.arxiv_url)} <ArrowUpRight size={12} />
           </a>
         </div>
       )}
@@ -768,7 +785,7 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
             rel="noopener noreferrer"
             className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/15 px-3 py-1.5 text-xs text-slate-300 transition hover:border-white/30 hover:text-white"
           >
-            arXiv <ArrowUpRight size={13} />
+            {linkLabel(paper.arxiv_url)} <ArrowUpRight size={13} />
           </a>
         </div>
       </div>
@@ -776,7 +793,7 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
       <Meta
         items={[
           `resolved via ${result.method.replace("_", " ")}`,
-          result.from_corpus ? "from local corpus" : "fetched live from arXiv",
+          result.from_corpus ? "from local corpus" : `fetched live from ${linkLabel(paper.arxiv_url) === "arXiv" ? "arXiv" : "OpenAlex"}`,
           paper.has_full_text ? "full text" : "abstract only",
           `${(result.timing_ms.total / 1000).toFixed(1)} s`,
         ]}
@@ -946,7 +963,7 @@ function PassageCard({ passage, queryId }: { passage: Passage; queryId: number |
             rel="noopener noreferrer"
             className="mt-3 inline-flex items-center gap-1 text-xs text-sky-400 hover:underline"
           >
-            Open on arXiv <ArrowUpRight size={12} />
+            Open on {linkLabel(passage.arxiv_url)} <ArrowUpRight size={12} />
           </a>
         </div>
       )}

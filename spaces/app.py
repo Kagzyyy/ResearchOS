@@ -152,7 +152,8 @@ def _render_papers(result: dict[str, Any]) -> str:
     lines: list[str] = [diag] if diag else []
     if result.get("source") == "arxiv_live":
         lines.append(
-            "> Not in the indexed corpus, so these came from a live arXiv search just now.\n"
+            "> Not in the indexed corpus, so these came from a live search of arXiv and "
+            "OpenAlex just now, rescored by the same reranker.\n"
         )
     elif not result.get("confident"):
         lines.append("> Weak matches — treat these as leads rather than answers.\n")
@@ -166,7 +167,10 @@ def _render_papers(result: dict[str, Any]) -> str:
         meta = [m for m in (
             _authors(paper.get("authors") or []),
             (paper.get("published") or "")[:10],
-            paper.get("primary_category") or "",
+            (paper.get("venue") if paper.get("venue") not in (None, "", "arXiv")
+             else paper.get("primary_category")) or "",
+            f"{paper['cited_by_count']:,} citations" if paper.get("cited_by_count") else "",
+            f"live · {paper['live_source']}" if paper.get("live_source") else "",
             f"score {paper.get('score')}",
         ) if m]
         lines.append(" · ".join(meta))

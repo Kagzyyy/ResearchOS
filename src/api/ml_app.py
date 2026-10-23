@@ -31,6 +31,8 @@ from src.api.ml_pipeline import MLPipeline
 from src.api.security import allowed_origins, api_token, guard, rate_limit_per_minute
 from src.api.uploads import UploadError, UploadStore
 from src.config import load_config
+from src.data.arxiv_source import breaker_open as arxiv_breaker_open
+from src.data.openalex_source import status as openalex_status
 
 CONFIG_PATH = os.environ.get("RESEARCHOS_ML_CONFIG", "configs/ml.yaml")
 
@@ -80,11 +82,15 @@ class AskRequest(BaseModel):
     query: str = Field(min_length=3, max_length=1000)
     top_k: int = Field(default=6, ge=1, le=20)
     generate: bool = True
+    # Set when this query came from a v2 diagnosis's "Try: ..." button: the id
+    # of the query whose diagnosis suggested it. Drives the live v2 funnel.
+    retry_of: int | None = Field(default=None, ge=1)
 
 
 class PapersRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=1000)
     top_k: int = Field(default=10, ge=1, le=30)
+    retry_of: int | None = Field(default=None, ge=1)
 
 
 class ExplainRequest(BaseModel):
@@ -93,6 +99,7 @@ class ExplainRequest(BaseModel):
     # When set, the question is answered against this uploaded PDF instead of
     # the corpus.
     document_id: str | None = Field(default=None, max_length=64)
+    retry_of: int | None = Field(default=None, ge=1)
 
 
 class ClickRequest(BaseModel):
@@ -134,6 +141,12 @@ def health() -> dict[str, Any]:
         "generation_enabled": is_configured(),
         "auth_required": api_token() is not None,
         "rate_limit_per_minute": rate_limit_per_minute(),
+        # Live sources are optional enrichments; this says which are usable
+        # right now and how much of OpenAlex's daily budget is left.
+        "live_sources": {
+            "arxiv": {"available": not arxiv_breaker_open()},
+            "openalex": openalex_status(),
+        },
     }
 
 
@@ -164,6 +177,9 @@ def papers(request: PapersRequest) -> dict[str, Any]:
         top_score=result["top_score"],
         mean_top_score=result["mean_top_score"],
         generated=False,
+        source=result.get("source"),
+        diagnosis=result.get("diagnosis"),
+        retry_of=request.retry_of,
     )
     return {"query_id": query_id, **result}
 
@@ -185,6 +201,9 @@ def ask(request: AskRequest) -> dict[str, Any]:
         top_score=result["top_score"],
         mean_top_score=result["mean_top_score"],
         generated=bool(result["answer"]) and result["generation_configured"],
+        source=result.get("source"),
+        diagnosis=result.get("diagnosis"),
+        retry_of=request.retry_of,
     )
     return {"query_id": query_id, **result}
 
@@ -237,6 +256,9 @@ def explain(request: ExplainRequest) -> dict[str, Any]:
         mode="explain",
         confident=result["resolved"],
         generated=bool(result.get("explanation")) and result["generation_configured"],
+        source=result.get("source"),
+        diagnosis=result.get("diagnosis"),
+        retry_of=request.retry_of,
     )
     return {"query_id": query_id, **result}
 
@@ -283,3 +305,16 @@ def failures(limit: int = 30) -> dict[str, Any]:
 @app.get("/stats")
 def stats() -> dict[str, int]:
     return state["log"].stats()
+
+
+@app.get("/v2/metrics")
+def v2_metrics() -> dict[str, Any]:
+    """Live v2 funnel: diagnoses shown, retries taken, retries that led to a click."""
+    return state["log"].v2_metrics()
+
+
+@app.get("/v2/labels")
+def v2_labels(limit: int = 200) -> dict[str, Any]:
+    """Retried-then-clicked pairs, exported as training data for a failure detector."""
+    rows = state["log"].v2_labels(limit=min(max(limit, 1), 1000))
+    return {"count": len(rows), "labels": rows}

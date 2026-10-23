@@ -81,6 +81,11 @@ MIGRATIONS = [
     ("queries", "mean_top_score", "REAL"),
     ("queries", "n_results", "INTEGER"),
     ("queries", "generated", "INTEGER"),
+    # v2: what the diagnosis said, and whether a query was a retry of one.
+    ("queries", "source", "TEXT"),
+    ("queries", "diagnosis_location", "TEXT"),
+    ("queries", "suggested_query", "TEXT"),
+    ("queries", "retry_of", "INTEGER"),
 ]
 
 
@@ -121,18 +126,29 @@ class FeedbackLog:
         top_score: float | None = None,
         mean_top_score: float | None = None,
         generated: bool | None = None,
+        source: str | None = None,
+        diagnosis: dict[str, Any] | None = None,
+        retry_of: int | None = None,
     ) -> int:
-        """Record a query, its answer, and the passages shown."""
+        """Record a query, its answer, the passages shown, and any v2 diagnosis."""
         with self._connect() as conn:
+            if retry_of is not None and conn.execute(
+                    "SELECT 1 FROM queries WHERE id = ?", (retry_of,)).fetchone() is None:
+                retry_of = None   # a stale or forged id must not corrupt the funnel
             cursor = conn.execute(
                 "INSERT INTO queries (ts, query, answer, latency_ms, backend, mode, "
-                "confident, top_score, mean_top_score, n_results, generated) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "confident, top_score, mean_top_score, n_results, generated, source, "
+                "diagnosis_location, suggested_query, retry_of) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     _now(), query, answer, latency_ms, backend, mode,
                     None if confident is None else int(confident),
                     top_score, mean_top_score, len(citations),
                     None if generated is None else int(generated),
+                    source,
+                    (diagnosis or {}).get("location"),
+                    (diagnosis or {}).get("suggested_query"),
+                    retry_of,
                 ),
             )
             query_id = int(cursor.lastrowid)
@@ -190,6 +206,70 @@ class FeedbackLog:
                 "errors": count("SELECT COUNT(*) FROM errors"),
                 "low_confidence": count("SELECT COUNT(*) FROM queries WHERE confident=0"),
             }
+
+    def v2_metrics(self) -> dict[str, Any]:
+        """The live v2 funnel: diagnosis shown -> retry clicked -> result used.
+
+        Offline evaluation can only ask whether the target paper ranked; this
+        asks whether real users found the suggestion worth following, and
+        whether following it led to a paper they opened. The baseline is
+        gate-fired queries nobody retried: did those users open anything?
+        """
+        with self._connect() as conn:
+            def one(sql: str) -> float:
+                return float(conn.execute(sql).fetchone()[0] or 0)
+
+            shown = one("SELECT COUNT(*) FROM queries WHERE diagnosis_location IS NOT NULL")
+            with_query = one("SELECT COUNT(*) FROM queries WHERE suggested_query IS NOT NULL")
+            retries = one("SELECT COUNT(*) FROM queries WHERE retry_of IS NOT NULL")
+            retry_clicked = one(
+                "SELECT COUNT(DISTINCT q.id) FROM queries q JOIN citation_clicks c "
+                "ON c.query_id = q.id WHERE q.retry_of IS NOT NULL")
+            fired_not_retried = one(
+                "SELECT COUNT(*) FROM queries q WHERE q.confident = 0 AND q.retry_of IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM queries r WHERE r.retry_of = q.id)")
+            fired_not_retried_clicked = one(
+                "SELECT COUNT(DISTINCT q.id) FROM queries q JOIN citation_clicks c "
+                "ON c.query_id = q.id WHERE q.confident = 0 AND q.retry_of IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM queries r WHERE r.retry_of = q.id)")
+            by_location = {
+                (r[0] or "none").split(":")[0]: r[1] for r in conn.execute(
+                    "SELECT diagnosis_location, COUNT(*) FROM queries "
+                    "WHERE diagnosis_location IS NOT NULL GROUP BY 1")
+            }
+            by_source = {r[0] or "corpus": r[1] for r in conn.execute(
+                "SELECT source, COUNT(*) FROM queries GROUP BY 1")}
+
+        def rate(a: float, b: float) -> float | None:
+            return round(a / b, 4) if b else None
+
+        return {
+            "diagnoses_shown": int(shown),
+            "diagnoses_with_query": int(with_query),
+            "retries": int(retries),
+            "retry_rate": rate(retries, with_query),
+            "retry_click_through": rate(retry_clicked, retries),
+            "baseline_click_through": rate(fired_not_retried_clicked, fired_not_retried),
+            "baseline_queries": int(fired_not_retried),
+            "diagnosis_locations": by_location,
+            "answer_sources": by_source,
+        }
+
+    def v2_labels(self, limit: int = 500) -> list[dict[str, Any]]:
+        """Retried-then-clicked pairs: free supervision for a failure detector.
+
+        Each row says "the original search did not satisfy this user, the
+        suggested query did, and here is the paper they opened" - exactly the
+        signal the offline gate could not see.
+        """
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT o.id AS original_id, o.query AS original_query, "
+                "o.mean_top_score AS original_mean_score, o.diagnosis_location, "
+                "r.id AS retry_id, r.query AS retry_query, c.doc_id AS clicked_doc, "
+                "r.ts AS ts FROM queries r JOIN queries o ON o.id = r.retry_of "
+                "JOIN citation_clicks c ON c.query_id = r.id "
+                "ORDER BY r.id DESC LIMIT ?", (limit,)).fetchall()]
 
     def recent_failures(self, limit: int = 50) -> dict[str, list[dict[str, Any]]]:
         """Everything worth reading when asking 'how is this failing?'."""
