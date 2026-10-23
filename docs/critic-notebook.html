@@ -437,7 +437,7 @@ AUC (does the score rank wrong answers above right ones?):
   <aside class="margin">
     <span class="num">Entry 12</span>
     <span class="concept">System design &middot; Ablations &middot; Failure isolation</span>
-    <div class="stat"><div class="v" id="rescue-headline">when / where</div><div class="k">who decides each half in production</div></div>
+    <div class="stat"><div class="v" id="rescue-headline">9 vs 22</div><div class="k">correct results lost: following the diagnosis vs rewriting blind (185 queries)</div></div>
   </aside>
   <div class="main">
     <h2>From research artifact to product</h2>
@@ -446,10 +446,31 @@ AUC (does the score rank wrong answers above right ones?):
       <li><p><b>When:</b> v1's existing confidence gate (mean of the top-5 reranker scores) decides that a result is weak. It already separates in-corpus from out-of-corpus queries cleanly, so the critic is never asked to judge.</p></li>
       <li><p><b>Where and how to fix:</b> a CRITIC-R1-format diagnosis names the retrieved paper that let the search down, says why, and proposes a query to run instead. The user sees it as a "Try: &hellip;" button.</p></li>
     </ul>
-    <p>The production diagnoser is gpt-oss on Groq rather than the fine-tuned 1.5B model, because the 1.5B model would take 15&ndash;30 seconds on the free CPU host. The trained critic stays as the measured research artifact. Every production diagnosis goes through the same strict parser the critic was trained against, and one that cites a document it wasn't shown is suppressed. It runs under a 6-second budget behind a circuit breaker, so it can never make a v1 answer slower or worse.</p>
+    <p>The production diagnoser is gpt-oss-120b on Groq rather than the fine-tuned 1.5B model, because the 1.5B model would take 15&ndash;30 seconds on the free CPU host. Groq's free tier caps each model at 200,000 tokens a day, and an evaluation run exhausted one mid-way. Answers and diagnoses now fall back to another model on a daily-cap error instead of retrying, and diagnoses use a different model's quota from answers so they can't starve them. The trained critic stays as the measured research artifact. Every production diagnosis goes through the same strict parser the critic was trained against, and one that cites a document it wasn't shown is suppressed. It runs under a 6-second budget behind a circuit breaker, so it can never make a v1 answer slower or worse.</p>
     <h3>The ablation that keeps it honest</h3>
     <p>If a diagnosis "fixes" a failed search, the gain might come from an LLM rephrasing the query, not from reading what went wrong. So the evaluation has a control arm that rewrites the query with the same model and never sees the retrieved documents, and it counts harms (a search v1 got right that the new query loses) as well as rescues.</p>
-    <div id="rescue-results"></div>
+    <div id="rescue-results">
+      <p>The first half of that evaluation already produced a result about the gate itself. I sampled 250 random papers from the corpus, had a model from a different family describe each one the way someone half-remembering it would (no title words, no method names), and checked whether v1 found the paper in its top 10.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>queries</th><th>n</th><th>v1 recall@10</th></tr></thead>
+        <tbody>
+          <tr><td>all</td><td class="n">250</td><td class="n">84.8%</td></tr>
+          <tr><td>gate confident</td><td class="n">65</td><td class="n">87.7%</td></tr>
+          <tr class="hl"><td>gate fires</td><td class="n">185</td><td class="n">83.8%</td></tr>
+        </tbody>
+      </table></div>
+      <div class="broke"><span class="label">What this showed</span>On vague queries the gate fires 74% of the time, and recall barely differs either side of it. The gate was calibrated to tell on-topic from off-topic queries, and it does that well. It can't tell whether the one paper you had in mind was found, because a vague description matches many right-topic papers weakly. A trigger that looks good on one query distribution can be close to useless on another, and only measuring it on the second distribution shows that.</div>
+      <p>Then the main question: on those 185 gate-fired queries, does running the diagnosis's suggested query find the paper more often than v1 did?</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>185 gate-fired queries</th><th>recall@10</th><th>rescued</th><th>harmed</th></tr></thead>
+        <tbody>
+          <tr><td>v1 as returned</td><td class="n">83.8%</td><td class="n">&nbsp;</td><td class="n">&nbsp;</td></tr>
+          <tr class="hl"><td>follow the v2 diagnosis</td><td class="n">83.8%</td><td class="n">9</td><td class="n">9</td></tr>
+          <tr><td>control: rewrite without the documents</td><td class="n">77.8%</td><td class="n">11</td><td class="n">22</td></tr>
+        </tbody>
+      </table></div>
+      <div class="held"><span class="label">What the numbers support</span>Following the diagnosis is net zero on recall: 9 rescued, 9 lost. It isn't a recall improvement. It is clearly safer than rewriting blind, which loses 22 correct results to rescue 11 (v2 against control 21 to 10, exact McNemar p = 0.07). So v1's results are always shown first, and the suggestion is an opt-in button. Without the control arm, "v2 rescued 9 failed searches" would have read like a win. With it, the same data says the rescues are about what any rewrite gets, and the real contribution is avoiding harm.</div>
+    </div>
   </div>
 </article>
 

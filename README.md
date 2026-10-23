@@ -96,11 +96,39 @@ title words or method names), then checks whether v1 finds the target in its top
 On this kind of query the gate is a **weak failure detector**. It fires on 74% of
 vague queries and recall barely differs either side of it. It was calibrated to
 separate on-topic from off-topic queries, and it does that well. It wasn't built to
-tell whether the *one paper you meant* was found. The rescue arm of the same eval
-measures whether following the diagnosis helps or hurts on those 185 queries,
-against a control that rewrites the query with the same model but never sees the
-retrieved documents. That control separates "the critic read what went wrong"
-from "an LLM rephrased the query".
+tell whether the *one paper you meant* was found.
+
+### Does following the diagnosis help?
+
+The same eval then follows the suggested query on all 185 gate-fired queries. It
+compares that against a control that rewrites the query with the same model
+(gpt-oss-120b) but never sees the retrieved documents, which separates "the
+diagnosis read what went wrong" from "an LLM rephrased the query". Results are in
+`results/v2_rescue.json`.
+
+| 185 gate-fired queries | recall@10 | 95% CI | rescued | harmed |
+|---|---|---|---|---|
+| v1 as returned | 83.8% | [77.8, 88.4] | | |
+| follow the v2 diagnosis | 83.8% | [77.8, 88.4] | 9 | 9 |
+| control: rewrite without the documents | 77.8% | [71.3, 83.2] | 11 | 22 |
+
+- **Following the diagnosis doesn't raise recall.** It rescues as many searches as it
+  loses (9 and 9). v2 is not claimed as a recall improvement.
+- **It is much safer than rewriting blind.** The control rescues about as often (11)
+  but loses more than twice as many correct results (22). Head to head, v2 keeps the
+  target in 21 cases where the control loses it, against 10 the other way (exact
+  McNemar p = 0.07). The direction is consistent with "reading the retrieved
+  documents prevents bad rewrites", but it isn't significant at this n.
+- **Its queries land on stronger evidence.** 48% of v2's suggested searches pass the
+  confidence gate, against 39% of the control's.
+- 183 of 185 diagnoses parsed and carried a runnable query. The rails suppressed 2.
+
+So v2's value is the explanation plus a suggestion that is safe to try. The UI
+always shows v1's results first and offers the suggestion as an opt-in button, so
+it never changes what a user sees unless they choose it. A
+diagnosis that actually raises recall would need a stronger failure trigger than
+the topic-level gate. That's the clearest next step, and this eval is the harness
+to measure it with.
 
 ### Code
 
