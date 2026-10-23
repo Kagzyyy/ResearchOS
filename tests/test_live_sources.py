@@ -222,6 +222,27 @@ def test_weak_openalex_title_match_is_not_accepted():
         citation._safe_fetch = saved_fetch
 
 
+def test_title_index_matches_full_scan_exactly():
+    """The pruned index must return what scoring every title would."""
+    import random
+
+    rng = random.Random(1)
+    vocab = ["attention", "graph", "neural", "network", "diffusion", "policy", "learning",
+             "robust", "sparse", "expert", "vision", "language", "model", "reward", "token"]
+    papers = {str(i): {"paper_id": str(i), "title": " ".join(rng.sample(vocab, rng.randint(2, 7)))}
+              for i in range(400)}
+    idf = citation._build_idf(papers)
+    default = max(idf.values())
+    index = citation.TitleIndex(papers)
+    for _ in range(200):
+        q = " ".join(rng.sample(vocab, rng.randint(1, 5)))
+        brute = sorted(((citation._weighted_coverage(q, m["title"], idf, default), pid)
+                        for pid, m in papers.items()), reverse=True)
+        brute = {pid: round(s, 9) for s, pid in brute if s > 0.2}
+        fast = {m["paper_id"]: round(s, 9) for s, m in index.search(q, floor=0.2) if s > 0.2}
+        assert fast == brute, q
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

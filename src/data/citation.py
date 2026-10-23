@@ -252,17 +252,78 @@ def _weighted_coverage(query: str, title: str, idf: dict[str, float], default_id
     return (matched / total) * length_penalty
 
 
+class TitleIndex:
+    """Inverted index over corpus titles, built once per corpus.
+
+    find_in_corpus used to rebuild the IDF table and score every title on
+    every lookup: fine at 8k papers, seconds per lookup at 300k. This keeps
+    the scoring identical and only changes which titles get scored.
+
+    Pruning is exact, not heuristic. A title that contains none of a set S of
+    query tokens can match at most (total - w(S)) of the query's IDF weight,
+    so if w(S) >= (1 - floor) * total it cannot score above `floor`. Taking
+    S as the rarest query tokens until that holds, the postings of S contain
+    every title that could clear the floor - the same results as a full scan.
+    """
+
+    def __init__(self, papers_by_id: dict[str, dict[str, Any]]) -> None:
+        import math
+
+        self.papers = papers_by_id
+        self.tokens: dict[str, set[str]] = {}
+        postings: dict[str, list[str]] = {}
+        for pid, meta in papers_by_id.items():
+            toks = _tokens(meta.get("title", ""))
+            self.tokens[pid] = toks
+            for t in toks:
+                postings.setdefault(t, []).append(pid)
+        self.postings = postings
+        n = max(1, len(papers_by_id))
+        self.idf = {t: math.log(n / (1 + len(ids))) for t, ids in postings.items()}
+        self.default_idf = max(self.idf.values(), default=1.0)
+
+    def search(self, query: str, floor: float = 0.2) -> list[tuple[float, dict[str, Any]]]:
+        qt = _tokens(query)
+        if not qt:
+            return []
+        weight = {t: self.idf.get(t, self.default_idf) for t in qt}
+        total = sum(weight.values())
+        needed, covered, pivots = (1.0 - floor) * total, 0.0, []
+        for t in sorted(qt, key=weight.get, reverse=True):
+            pivots.append(t)
+            covered += weight[t]
+            if covered >= needed:
+                break
+        candidates = {pid for t in pivots for pid in self.postings.get(t, ())}
+        scored = []
+        for pid in candidates:
+            tt = self.tokens[pid]
+            matched = sum(weight[t] for t in qt & tt)
+            score = (matched / total) * min(1.0, len(qt) / max(1, len(tt))) ** 0.5
+            scored.append((score, self.papers[pid]))
+        scored.sort(key=lambda kv: kv[0], reverse=True)
+        return scored
+
+
+_TITLE_INDEX: dict[int, tuple[int, TitleIndex]] = {}
+
+
+def _title_index(papers_by_id: dict[str, dict[str, Any]]) -> TitleIndex:
+    """One index per corpus dict, rebuilt only if the corpus changes size."""
+    key = id(papers_by_id)
+    cached = _TITLE_INDEX.get(key)
+    if cached is None or cached[0] != len(papers_by_id):
+        _TITLE_INDEX.clear()          # one live corpus per process
+        cached = (len(papers_by_id), TitleIndex(papers_by_id))
+        _TITLE_INDEX[key] = cached
+    return cached[1]
+
+
 def find_in_corpus(
     query: str, papers_by_id: dict[str, dict[str, Any]], threshold: float = 0.72
 ) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
     """Best local title match, plus runners-up for disambiguation."""
-    idf = _build_idf(papers_by_id)
-    default_idf = max(idf.values(), default=1.0)
-    scored = [
-        (_weighted_coverage(query, meta.get("title", ""), idf, default_idf), meta)
-        for meta in papers_by_id.values()
-    ]
-    scored.sort(key=lambda kv: kv[0], reverse=True)
+    scored = _title_index(papers_by_id).search(query, floor=0.2)
     candidates = [
         {"paper_id": m.get("paper_id", ""), "title": m.get("title", ""), "score": f"{s:.2f}"}
         for s, m in scored[:5]
