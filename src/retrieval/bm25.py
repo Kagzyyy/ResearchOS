@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 import bm25s
@@ -27,15 +29,25 @@ class BM25Retriever:
         """Build (or load) the inverted index for this corpus."""
         self.doc_ids = doc_ids
         cache = Path(cache_dir) / "bm25" if cache_dir else None
-        if cache is not None and (cache / "data.csc.index.npy").exists():
+        # The index stores positions, not ids, so loading one built for a
+        # different corpus silently maps every hit to the wrong document. A
+        # fingerprint of the exact id list is saved beside it and must match.
+        fingerprint = {"n_docs": len(doc_ids), "k1": self.k1, "b": self.b,
+                       "ids_sha1": hashlib.sha1("\n".join(doc_ids).encode()).hexdigest()}
+        meta = cache / "corpus.json" if cache is not None else None
+        if (cache is not None and (cache / "data.csc.index.npy").exists() and meta.exists()
+                and json.loads(meta.read_text()) == fingerprint):
             self.retriever = bm25s.BM25.load(str(cache), load_corpus=False)
             return
+        if cache is not None and (cache / "data.csc.index.npy").exists():
+            print("[bm25] cached index is for a different corpus; rebuilding", flush=True)
         retriever = bm25s.BM25(k1=self.k1, b=self.b)
         retriever.index(self._tokenize(doc_texts), show_progress=False)
         self.retriever = retriever
         if cache is not None:
             cache.parent.mkdir(parents=True, exist_ok=True)
             retriever.save(str(cache))
+            meta.write_text(json.dumps(fingerprint))
 
     def search(self, queries: dict[str, str], top_k: int = 50) -> Run:
         """Return {query_id: {doc_id: score}} for every query."""

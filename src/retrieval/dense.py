@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import faiss
@@ -54,7 +55,10 @@ class DenseRetriever:
         cache_file = None
         if cache_dir:
             slug = self.model_name.replace("/", "_")
-            cache_file = Path(cache_dir) / f"dense_{slug}_{len(doc_ids)}.npy"
+            # Keyed on the exact id list, not just its length: two corpora of
+            # the same size would otherwise share (wrong) vectors silently.
+            ids_sha = hashlib.sha1("\n".join(doc_ids).encode()).hexdigest()[:10]
+            cache_file = Path(cache_dir) / f"dense_{slug}_{len(doc_ids)}_{ids_sha}.npy"
             cache_file.parent.mkdir(parents=True, exist_ok=True)
 
         if cache_file is not None and cache_file.exists():
