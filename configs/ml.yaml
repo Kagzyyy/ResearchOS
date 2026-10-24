@@ -72,8 +72,9 @@ answer:
   # Measured, not eyeballed: scripts/calibrate_gate.py (results/gate_calibration_*.json).
   # The old 0.35 came from a few hand-picked queries ("in-corpus 0.67-0.996") and
   # refused 49% of specific questions whose answer paper WAS retrieved
-  # (recall@10 = 100%). Pass rates, specific / vague / off-topic:
-  #   0.35 -> 51% / 31% / 2.5%      0.20 -> 94% / 59% / 20%
+  # (recall@10 = 100%). Pass rates, specific / vague / off-topic, on the 123k
+  # corpus (more papers lift every score, so this was re-measured for it):
+  #   0.35 -> 78% / 59% / 15%       0.20 -> 97% / 78% / 25%
   # A wrongly refused good question costs more than an off-topic one let
   # through: the answer prompt still says plainly when passages do not
   # cover the question. Recalibrate whenever the corpus changes size.
@@ -129,11 +130,13 @@ server:
   ui_port: 7900
 
 paths:
-  papers: data/arxiv_papers.jsonl
-  chunks: data/arxiv_chunks.jsonl
+  # v3: v1's 8,330 full-text papers + 114,622 harvested abstracts (2024-01 ..
+  # 2025-09) - scripts/harvest_arxiv_oai.py then scripts/build_corpus.py.
+  papers: data/corpus_v3/papers.jsonl
+  chunks: data/corpus_v3/chunks.jsonl
   pdf_cache: cache/arxiv/pdf
   text_cache: cache/arxiv/text
-  index_cache: cache/ml
+  index_cache: cache/ml_v3
   feedback_db: results/ml_feedback.db
   upload_dir: cache/uploads
 

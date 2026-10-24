@@ -304,8 +304,20 @@ class TitleIndex:
         scored.sort(key=lambda kv: kv[0], reverse=True)
         return scored
 
+    def title_coverage(self, query: str, title: str) -> float:
+        """Share of the TITLE's IDF weight that the query covers - the
+        direction search() ignores."""
+        tt, qt = _tokens(title), _tokens(query)
+        if not tt:
+            return 0.0
+        w = {t: self.idf.get(t, self.default_idf) for t in tt}
+        return sum(w[t] for t in tt & qt) / sum(w.values())
+
 
 _TITLE_INDEX: dict[int, tuple[int, TitleIndex]] = {}
+
+AMBIGUITY_MARGIN = 0.05      # best must beat the runner-up by this much...
+TITLE_COVERAGE_MIN = 0.80    # ...or the query must cover the title's own words
 
 
 def _title_index(papers_by_id: dict[str, dict[str, Any]]) -> TitleIndex:
@@ -322,15 +334,31 @@ def _title_index(papers_by_id: dict[str, dict[str, Any]]) -> TitleIndex:
 def find_in_corpus(
     query: str, papers_by_id: dict[str, dict[str, Any]], threshold: float = 0.72
 ) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
-    """Best local title match, plus runners-up for disambiguation."""
-    scored = _title_index(papers_by_id).search(query, floor=0.2)
+    """Best local title match, plus runners-up for disambiguation.
+
+    A high score alone is not enough at scale. The score asks how much of
+    the query a title covers, so with 123k papers a cited title that is NOT
+    in the corpus ("Self-Supervised Learning from Images with a
+    Joint-Embedding Predictive Architecture") matched three different JEPA
+    papers at an identical 0.82. A match is accepted only when it is also
+    unambiguous - clearly ahead of the runner-up - or covers the title's own
+    words too; otherwise resolution falls through to arXiv/OpenAlex.
+    Measured on 600 corpus titles: recall unchanged on exact, word-dropped
+    and word-added citations (100 / 99.5 / 98.7%); the tie case is rejected.
+    """
+    index = _title_index(papers_by_id)
+    scored = index.search(query, floor=0.2)
     candidates = [
         {"paper_id": m.get("paper_id", ""), "title": m.get("title", ""), "score": f"{s:.2f}"}
         for s, m in scored[:5]
         if s > 0.2
     ]
     if scored and scored[0][0] >= threshold:
-        return scored[0][1], candidates
+        best_score, best = scored[0]
+        runner_up = scored[1][0] if len(scored) > 1 else 0.0
+        if (best_score - runner_up >= AMBIGUITY_MARGIN
+                or index.title_coverage(query, best.get("title", "")) >= TITLE_COVERAGE_MIN):
+            return best, candidates
     return None, candidates
 
 
@@ -366,6 +394,12 @@ def resolve(
                 if fetch_full_text:
                     _attach_text(paper, pdf_dir, text_dir, max_cache_gb)
                 return Resolution(paper, "arxiv_id", arxiv_id, False, [])
+            # arXiv down or throttling: every arXiv paper also has a DataCite
+            # DOI, which OpenAlex resolves - so an arXiv id never depends on
+            # arXiv's own API being up.
+            work = _safe_openalex(openalex.get_by_doi, f"10.48550/arxiv.{arxiv_id}")
+            if work and work.get("title"):
+                return Resolution(_paper_from_openalex(work), "arxiv_id", arxiv_id, False, [])
 
     # --- 1b. DOI: conference and journal papers arXiv does not know ---
     if doi and not arxiv_doi and allow_remote:

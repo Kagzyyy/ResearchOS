@@ -243,6 +243,41 @@ def test_title_index_matches_full_scan_exactly():
         assert fast == brute, q
 
 
+def test_tied_local_titles_are_not_accepted():
+    """A cited paper absent from the corpus must not resolve to a look-alike.
+
+    Regression: at 123k papers, I-JEPA's title tied three JEPA papers at 0.82.
+    """
+    papers = {
+        "a": {"paper_id": "a", "title": "Connecting Joint-Embedding Predictive Architecture with Contrastive Self-supervised Learning"},
+        "b": {"paper_id": "b", "title": "3D-JEPA: A Joint Embedding Predictive Architecture for 3D Self-Supervised Representation Learning"},
+        "c": {"paper_id": "c", "title": "Joint-Embedding Predictive Architecture for Self-Supervised Learning of Mask Classification Architecture"},
+        **{str(i): {"paper_id": str(i), "title": f"Unrelated paper on topic {i} with graphs"} for i in range(50)},
+    }
+    citation._TITLE_INDEX.clear()
+    match, candidates = citation.find_in_corpus(
+        "Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture", papers)
+    assert match is None, match
+    assert candidates, "look-alikes are still offered as candidates"
+    match, _ = citation.find_in_corpus(
+        "3D-JEPA: A Joint Embedding Predictive Architecture for 3D Self-Supervised Representation Learning",
+        papers)
+    assert match and match["paper_id"] == "b", "an exact title still resolves"
+    citation._TITLE_INDEX.clear()
+
+
+def test_arxiv_id_resolves_through_openalex_when_arxiv_is_down():
+    saved_doi = _patch("get_by_doi", lambda d: oa.parse_work(dict(WORK, doi=f"https://doi.org/{d}")))
+    saved_fetch = citation._safe_fetch
+    citation._safe_fetch = lambda *a, **k: []          # arXiv answered nothing
+    try:
+        r = citation.resolve("arXiv:1706.03762", {}, fetch_full_text=False)
+        assert r.method == "arxiv_id" and r.paper.paper_id == "1706.03762"
+    finally:
+        _patch("get_by_doi", saved_doi)
+        citation._safe_fetch = saved_fetch
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
