@@ -103,7 +103,7 @@ def parse_page(xml_text: str, categories: set[str], created_from: str
 
 def fetch(client: httpx.Client, params: dict[str, str]) -> str:
     """One page, honouring arXiv's 503 Retry-After. Patient: this is offline."""
-    for attempt in range(12):
+    for attempt in range(20):
         try:
             r = client.get(ENDPOINT, params=params, timeout=120.0)
         except httpx.HTTPError as exc:
@@ -112,9 +112,12 @@ def fetch(client: httpx.Client, params: dict[str, str]) -> str:
             time.sleep(wait)
             continue
         if r.status_code in (429, 503):
-            wait = int(r.headers.get("Retry-After", "30") or 30)
-            print(f"    {r.status_code}; arXiv asks to wait {wait}s", flush=True)
-            time.sleep(min(wait, 600))
+            # arXiv sometimes sends "Retry-After: 0" with a 503; retrying at
+            # once just collects more 503s, so back off regardless.
+            hinted = int(r.headers.get("Retry-After", "0") or 0)
+            wait = max(hinted, min(600, 30 * 2 ** min(attempt, 4)))
+            print(f"    {r.status_code}; waiting {wait}s (arXiv hinted {hinted}s)", flush=True)
+            time.sleep(wait)
             continue
         r.raise_for_status()
         return r.text
@@ -148,8 +151,22 @@ def main() -> None:
             while True:
                 params = ({"verb": "ListRecords", "resumptionToken": s["token"]} if s["token"]
                           else {"verb": "ListRecords", "metadataPrefix": "arXiv",
-                                "set": oai_set, "from": args.created_from})
-                papers, token, seen = parse_page(fetch(client, params), cats, args.created_from)
+                                "set": oai_set,
+                                "from": s.get("restart_from") or args.created_from})
+                try:
+                    papers, token, seen = parse_page(fetch(client, params), cats,
+                                                     args.created_from)
+                except RuntimeError as exc:
+                    if "badResumptionToken" not in str(exc) or not s["token"]:
+                        raise
+                    # Tokens expire. The token itself encodes the datestamp it
+                    # had reached, so restart a fresh listing from there; the
+                    # overlap is re-fetched and deduplicated at build time.
+                    reached = re.search(r"from%3D(\d{4}-\d{2}-\d{2})", s["token"])
+                    s["restart_from"] = reached.group(1) if reached else args.created_from
+                    print(f"[oai] token expired; restarting {oai_set} from {s['restart_from']}")
+                    s["token"] = None
+                    continue
                 with open(out, "a", encoding="utf-8") as fh:
                     for p in papers:
                         fh.write(json.dumps(asdict(p), ensure_ascii=False) + "\n")
