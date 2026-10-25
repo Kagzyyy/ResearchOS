@@ -19,15 +19,19 @@ from pathlib import Path
 from typing import Any
 
 
-def _complete(paths: dict[str, Any]) -> bool:
-    """Are the corpus files and both index caches present?"""
+def _missing(paths: dict[str, Any]) -> list[str]:
+    """What is absent among the corpus files and both index caches."""
     cache = Path(paths["index_cache"])
-    return (
-        Path(paths["papers"]).exists()
-        and Path(paths["chunks"]).exists()
-        and (cache / "bm25" / "corpus.json").exists()
-        and any(cache.glob("dense_*.npy"))
-    )
+    missing = [str(Path(paths[k])) for k in ("papers", "chunks") if not Path(paths[k]).exists()]
+    if not (cache / "bm25" / "corpus.json").exists():
+        missing.append(str(cache / "bm25" / "corpus.json"))
+    if not any(cache.glob("dense_*.npy")):
+        missing.append(str(cache / "dense_*.npy"))
+    return missing
+
+
+def _complete(paths: dict[str, Any]) -> bool:
+    return not _missing(paths)
 
 
 def _patterns(paths: dict[str, Any]) -> list[str]:
@@ -53,13 +57,20 @@ def ensure_corpus(cfg: dict[str, Any]) -> dict[str, Any]:
 
             started = time.time()
             print(f"[corpus] downloading {repo} (first start of this container) ...", flush=True)
-            snapshot_download(repo_id=repo, repo_type="dataset", local_dir=".",
-                              allow_patterns=_patterns(paths), max_workers=8)
+            got = snapshot_download(repo_id=repo, repo_type="dataset", local_dir=".",
+                                    allow_patterns=_patterns(paths), max_workers=8)
             if _complete(paths):
                 took = time.time() - started
                 print(f"[corpus] ready in {took:.0f}s", flush=True)
                 return {"source": "downloaded", "repo": repo, "seconds": round(took)}
-            error = "download finished but files are missing"
+            # Say exactly what is absent and where the files went: this string
+            # is shown in /health, the only window into a Space's boot.
+            # huggingface_hub does not raise for a private repo it cannot
+            # authenticate to: with local_dir set it quietly returns the
+            # (empty) folder. So "nothing arrived" almost always means no
+            # HF_TOKEN secret, and the message says so.
+            error = (f"nothing downloaded from {repo} (returned {got!r}) - it is private, so the "
+                     f"Space needs an HF_TOKEN secret with read access; missing {_missing(paths)}")
         except Exception as exc:  # noqa: BLE001 - any failure must degrade, not crash
             error = f"{type(exc).__name__}: {str(exc)[:160]}"
 

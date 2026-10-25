@@ -143,6 +143,8 @@ footer { padding-block: 36px 0; color: var(--muted); font-size: 0.9rem; }
     <li><span class="n">11</span><a href="#statistics">Measuring it honestly</a></li>
     <li><span class="n">12</span><a href="#product">From research artifact to product</a></li>
     <li><span class="n">13</span><a href="#threshold">Calibrating a decision threshold</a></li>
+    <li><span class="n">14</span><a href="#adaptive">Adaptive compute: stop scoring when sure</a></li>
+    <li><span class="n">15</span><a href="#abstain">Knowing when you do not know</a></li>
   </ol>
 </nav>
 
@@ -509,6 +511,76 @@ slips through still meets an answer prompt told to say "these passages do not
 cover that" - so c_FN &gt; c_FP and P(answerable) &gt;&gt; P(off-topic), pushing t down</pre>
     <div class="broke"><span class="label">What broke</span>The old threshold refused half of the specific questions while the paper that answered each one was in its top ten (recall@10 = 100%). The config comment claimed answerable queries score 0.67&ndash;0.996. That was true of the few queries it was read from, and of almost nothing else. A threshold set by eye is a guess about a distribution nobody measured.</div>
     <div class="held"><span class="label">The lesson</span>Report the whole trade-off curve, choose a point on it from the costs of each error, and re-measure whenever the data changes. A 35&times; larger corpus changes what "confident" means, so the calibration script runs again before that corpus ships.</div>
+  </div>
+</article>
+
+<!-- 14 -->
+<article class="entry" id="adaptive">
+  <aside class="margin">
+    <span class="num">Entry 14</span>
+    <span class="concept">Adaptive computation &middot; Early exit &middot; Caching</span>
+    <div class="stat pass"><div class="v">3.4 &rarr; 2.3 s</div><div class="k">search end to end from a client, on the CPU Space (0.78 s is server time, ~1.5 s is network); 1.6 s when repeated</div></div>
+  </aside>
+  <div class="main">
+    <h2>Adaptive compute: stop scoring when sure</h2>
+    <p>A search retrieves candidate passages cheaply (BM25 and a bi-encoder), then a cross-encoder reads each query&ndash;passage pair together, which is far more accurate and far more expensive. I profiled one search, stage by stage, on 307k passages:</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>stage</th><th>time (GPU)</th><th>scales with</th></tr></thead>
+      <tbody>
+        <tr><td>BM25</td><td class="n">~8 ms</td><td>corpus size, barely</td></tr>
+        <tr><td>query embedding + flat FAISS</td><td class="n">60&ndash;85 ms</td><td>corpus size, linearly</td></tr>
+        <tr><td>rank fusion</td><td class="n">0.1 ms</td><td>&mdash;</td></tr>
+        <tr class="hl"><td>cross-encoder rerank</td><td class="n">90 ms at 20, 225 ms at 60</td><td>candidates scored</td></tr>
+      </tbody>
+    </table></div>
+    <p>The reranker is linear in the number of pairs, and on a CPU that line is steep. So the lever is how many candidates get scored, not how fast any one is. Score a small first batch, and only continue if it is not already convincing:</p>
+    <pre class="math">score the best n1 fused candidates (n1 = 15)
+if mean(top 5 reranker scores) &ge; tau (tau = 0.7):   stop
+else:                                              score the remaining N - n1
+
+expected candidates scored  E[n] = n1 + (1 - p_exit) * (N - n1)
+measured: p_exit = 0.46, n1 = 15, N = 30   &rarr;   E[n] = 15 + 0.54 * 15 = 23.1   (23% fewer)</pre>
+    <p>I did not tune this on the live system. One full rerank per query was recorded, and every (n1, tau) policy was simulated from those same scores, so the comparison is exact: the same scores, just a different subset available to the policy.</p>
+    <div class="tablewrap"><table>
+      <thead><tr><th>policy</th><th>recall@10 specific</th><th>vague</th><th>exits early</th><th>scored</th><th>top-5 same as full</th></tr></thead>
+      <tbody>
+        <tr><td>full rerank (30)</td><td class="n">98.8%</td><td class="n">56.8%</td><td class="n">0%</td><td class="n">30.0</td><td class="n">100%</td></tr>
+        <tr class="hl"><td>n1 = 15, tau = 0.7</td><td class="n">98.8%</td><td class="n">57.6%</td><td class="n">46%</td><td class="n">23.1</td><td class="n">84%</td></tr>
+        <tr><td>n1 = 10, tau = 0.5</td><td class="n">98.2%</td><td class="n">55.6%</td><td class="n">57%</td><td class="n">18.5</td><td class="n">75%</td></tr>
+      </tbody>
+    </table></div>
+    <div class="held"><span class="label">What this does and does not show</span>The paper you were looking for is found equally often. But the top-5 list is identical to a full rerank only 84% of the time, because the extra candidates can displace results near the head. Whether those displacements are better or worse is not something recall against a single gold paper can say. I chose a middle setting and wrote the number down instead of reporting recall alone.</div>
+    <p>Two cheaper wins came with it. Every stage is deterministic and the corpus is static, so a repeated query (a retry, a shared link, the same text asked from two tabs) can be served from a cache: its server time measured 0 ms against 781 ms cold. And BM25 and dense search now run side by side, which the profile says saves only about 8 ms, since dense search dominates. I kept it because it is free, not because it matters.</p>
+    <div class="broke"><span class="label">What I got wrong</span>A first CPU benchmark reported 42 seconds to rerank 30 passages, three hundred times the GPU, and I put it down to the laptop paging because the whole index was in RAM. That explanation was wrong. Pinned to 2 threads, 30 pairs through a 278M-parameter model is about 6 TFLOP of arithmetic, and 42 seconds is what that costs. The deployed Space answers in under a second, so it is plainly not limited to 2 threads, whatever its config comment assumed. A laptop run with an assumed core count was a bad proxy for a machine I could not inspect, and the only trustworthy number was the one measured on the live service.</div>
+  </div>
+</article>
+
+<!-- 15 -->
+<article class="entry" id="abstain">
+  <aside class="margin">
+    <span class="num">Entry 15</span>
+    <span class="concept">Abstention &middot; Grounded vs parametric knowledge &middot; Scope control</span>
+    <div class="stat pass"><div class="v">30/30 &middot; 40/40</div><div class="k">AI questions answered &middot; off-topic questions declined</div></div>
+  </aside>
+  <div class="main">
+    <h2>Knowing when you do not know</h2>
+    <p>A retrieval system has two honest ways to fail: refuse, or answer from memory and say so. Refusing everything outside the indexed papers is safe and useless for a basic question like &ldquo;what is the Bellman equation?&rdquo;. Answering from memory without saying so is the dangerous one. The design separates the three cases explicitly.</p>
+    <pre class="math">answer from the papers              the answerer sees passages, cites them
+  &darr; if the passages do not contain it, it replies exactly:  NOT_COVERED
+answer from general knowledge       one call that is BOTH the scope check and the answer:
+                                    outside AI?  reply  OUT_OF_SCOPE  &rarr; decline
+                                    otherwise answer, labelled "not from papers", no citations
+decline</pre>
+    <p>The sentinel is the point. Without it, the grounded answerer is asked to say &ldquo;the passages do not contain the answer&rdquo; in prose, which no code can reliably detect, so a weak answer reads like a good one. With it, abstention becomes a signal the pipeline can route on. Using one call as both scope check and answer saves a round trip on every fallback.</p>
+    <p>Measured with the real model on 30 AI concept questions and the 40 off-topic questions used to calibrate the retrieval gate:</p>
+    <pre class="math">AI questions answered      30 / 30   (95% Wilson CI 89&ndash;100%)
+off-topic declined         40 / 40   (95% CI 91&ndash;100%)
+answers containing a URL or arXiv id    0
+
+general programming (reported, not scored): SQL declined; "Python decorators" and
+"big-O" still answered   &larr; a known, small scope leak</pre>
+    <div class="broke"><span class="label">What broke</span>The first scope prompt answered SQL, decorators and big-O, because &ldquo;closely related technical topics&rdquo; is exactly as loose as it sounds. Naming what is out of scope (general programming, databases, software engineering) fixed one of three. Separately, a reasoning model spent its entire 1,300-token budget thinking about one question and returned an empty string, which the app would have shown as a decline for a legitimate AI question. Two fixes: ask for low reasoning effort (these tasks need little deliberation, and it is faster), and treat an empty answer as that model failing, so the next one is tried.</div>
+    <div class="held"><span class="label">The lesson</span>Reasoning-model token budgets include the hidden thinking. Any pipeline that sets <code>max_tokens</code> for the visible answer will intermittently get nothing back, and it will do so on the hard questions. Handle &ldquo;empty&rdquo; as a first-class failure.</div>
   </div>
 </article>
 

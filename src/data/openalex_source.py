@@ -85,6 +85,20 @@ class OpenAlexUnavailable(RuntimeError):
     """OpenAlex did not answer in time, refused, or is paused."""
 
 
+# Characters OpenAlex's search syntax gives meaning to. User text is prose, not
+# a query language: "What is the bias-variance tradeoff?" contains a "?", which
+# OpenAlex reads as a wildcard and rejects with a 400 - so every question-form
+# query failed. Quotes, parentheses and operators are dropped the same way.
+_SYNTAX = re.compile(r"[?*~^|<>{}\\\[\]()\"]")
+
+
+def clean_query(text: str, drop: str = "") -> str:
+    text = _SYNTAX.sub(" ", text or "")
+    if drop:
+        text = re.sub(f"[{re.escape(drop)}]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 # ---------------------------------------------------------------- state ----
 def breaker_open() -> bool:
     with _LOCK:
@@ -220,6 +234,11 @@ def _get(path: str, params: dict[str, Any]) -> dict[str, Any]:
         retry = float(r.headers.get("Retry-After", "60") or 60)
         _pause(min(max(retry, 30.0), MAX_BUDGET_PAUSE_S), "rate limited (429)")
         raise OpenAlexUnavailable("rate limited")
+    if 400 <= r.status_code < 500 and r.status_code != 403:
+        # This query was rejected; OpenAlex is fine. Raised as "unavailable" so
+        # callers degrade, but WITHOUT pausing the source - one malformed
+        # query must not switch off live search for everyone for two minutes.
+        raise OpenAlexUnavailable(f"query rejected ({r.status_code})")
     r.raise_for_status()
     return r.json()
 
@@ -260,7 +279,7 @@ def _bounded(key: str, fn, budget_s: float):
 def search_works(query: str, max_results: int = 8, budget_s: float = REQUEST_BUDGET_S,
                  filter_: str = DEFAULT_FILTER) -> list[dict[str, Any]]:
     """Relevance-ranked search over titles, abstracts and full text."""
-    query = (query or "").strip()
+    query = clean_query(query)
     if not query:
         return []
     params = {"search": query[:300], "per_page": max(1, min(max_results, 25)),
@@ -277,7 +296,9 @@ def search_title(title: str, max_results: int = 8,
                  budget_s: float = REQUEST_BUDGET_S) -> list[dict[str, Any]]:
     """Title-only search, for citation resolution. No field filter: a cited
     paper can be from any field, and the title match itself is the check."""
-    title = re.sub(r"[,:;()\[\]\"]", " ", title or "").strip()
+    # In a filter value "," separates filters and ":" separates a field from
+    # its value, so both are removed along with the search-syntax characters.
+    title = clean_query(title, drop=",:;")
     if not title:
         return []
     params = {"filter": f"title.search:{title[:250]}",

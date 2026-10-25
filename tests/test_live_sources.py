@@ -160,6 +160,77 @@ def test_slow_source_does_not_extend_the_budget():
     assert [p["paper_id"] for p in out] == ["1"]
 
 
+def test_question_marks_and_operators_never_reach_openalex():
+    """A "?" is a wildcard to OpenAlex, which rejected every question-form query."""
+    assert oa.clean_query("What is the bias-variance tradeoff?") == "What is the bias-variance tradeoff"
+    assert oa.clean_query('a*b "quoted" (x) [y] | z') == "a b quoted x y z"
+    assert oa.clean_query("Title: A, B; C", drop=",:;") == "Title A B C"
+    assert oa.clean_query("???") == ""
+
+
+def test_search_sends_the_cleaned_query():
+    _reset()
+    sent = {}
+
+    def fake_get(path, params):
+        sent.update(params)
+        return {"results": []}
+    saved = oa._get
+    oa._get = fake_get
+    try:
+        oa.search_works("How does attention work?", 3)
+    finally:
+        oa._get = saved
+        _reset()
+    assert "?" not in sent["search"]
+
+
+def test_a_rejected_query_does_not_pause_the_source():
+    """One malformed query is not an outage: the next request must still go out."""
+    _reset()
+
+    class Resp:
+        status_code = 400
+        headers = httpx.Headers({})
+
+        def json(self):
+            return {}
+    saved = httpx.get
+    httpx.get = lambda *a, **k: Resp()
+    try:
+        try:
+            oa.search_works("anything at all")
+            raise AssertionError("expected OpenAlexUnavailable")
+        except oa.OpenAlexUnavailable as exc:
+            assert "rejected" in str(exc)
+    finally:
+        httpx.get = saved
+    assert not oa.breaker_open(), "a 400 must not trip the breaker"
+    _reset()
+
+
+def test_a_server_error_does_pause_the_source():
+    _reset()
+
+    class Resp:
+        status_code = 503
+        headers = httpx.Headers({})
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("503", request=None, response=None)
+    saved = httpx.get
+    httpx.get = lambda *a, **k: Resp()
+    try:
+        try:
+            oa.search_works("anything else")
+        except oa.OpenAlexUnavailable:
+            pass
+    finally:
+        httpx.get = saved
+    assert oa.breaker_open(), "a real outage should still back off"
+    _reset()
+
+
 def test_fast_source_is_not_held_for_a_slow_one():
     """OpenAlex answered; arXiv needs 3 s. Return after the grace, not the 3 s."""
     def slow_arxiv(q, k, d):

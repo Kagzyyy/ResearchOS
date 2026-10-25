@@ -2,8 +2,8 @@
 
 A research engine for AI/ML papers: describe a topic, paste a half-remembered
 citation, or upload a PDF, and get ranked papers and grounded answers over
-**122,952 AI papers (155,001 passages)**, plus live arXiv and OpenAlex search for
-anything outside them. When it can't find good evidence, it says so and explains
+**274,916 AI papers (306,965 passages)** from 2024 to October 2026, plus live arXiv
+and OpenAlex search for anything outside them. When it can't find good evidence, it says so and explains
 what went wrong instead of guessing.
 
 **Live:** [researchos-brown.vercel.app](https://researchos-brown.vercel.app) ·
@@ -186,47 +186,120 @@ PageRank query ranked a Spanish thesis and a course page above the PageRank pape
 itself. Semantic Scholar was evaluated and left out, because its keyless API refused
 every request.
 
-### Growing the corpus 15×
+### Growing the corpus 33×
 
-v1 indexed 8,330 papers with full text. v3 adds **114,622 abstracts** of every
-arXiv paper first submitted from January 2024 to September 2025 in cs.LG, CV,
-CL, AI, RO, IR, NE and stat.ML. They're harvested through arXiv's OAI-PMH
-bulk interface (resumable, checkpointed per page) and merged by
-`scripts/build_corpus.py`. Indexing 155k passages takes 16 minutes on the
-laptop GPU and is shipped prebuilt, so the Space never embeds anything at boot.
-It serves in about 3 GB of RAM.
+v1 indexed 8,330 papers with full text. v3 adds **266,586 abstracts** of every
+arXiv paper first submitted from January 2024 to October 2026 in cs.LG, CV, CL,
+AI, RO, IR, NE and stat.ML, harvested through arXiv's OAI-PMH bulk interface
+(resumable, checkpointed per page) and merged by `scripts/build_corpus.py`.
+Indexing 307k passages takes 23 minutes on the laptop GPU
+(`scripts/build_index.py`, a lean process that doesn't load the reranker) and the
+indices ship prebuilt, so the server never embeds anything at boot.
 
-A bigger corpus isn't automatically better, so both sides were measured before
-it shipped:
+A bigger corpus isn't automatically better, so both sides were measured:
 
-| Vague, half-remembered query for… | 8k corpus | 123k corpus |
+| Vague, half-remembered query for… | 8k corpus | 275k corpus |
 |---|---|---|
-| a paper in the old corpus (250 queries) | 83.2% | 65.2% |
-| a paper only the new corpus has (150 queries) | **0%** | **54.7%** [46.7, 62.4] |
+| a paper in the old corpus (250 queries) | 83.2% | 58.0% |
+| a paper only the new corpus has (150 queries) | **0%** | **52.7%** [44.7, 60.5] |
 
-- **The cost is real.** With 15× more same-topic papers, the one you half-remember
-  is outranked more often. Specific questions barely move (100% → 99.4%).
-- **The gain is much larger.** v1's live arXiv fallback never fired on these
-  queries: its gate saw on-topic matches and called the search confident. For a
-  random 2024–25 AI paper, only about 7% of which were in the old corpus,
-  findability goes from roughly 6% to roughly 55%.
-- **The obvious fix doesn't work.** Retrieving 150 first-stage candidates instead of
-  60 puts the target in the pool more often (81% → 88%), but recall@10 *drops*
-  (65.2% → 63.2%) at twice the latency. The reranker is the bottleneck, so the
-  next lever is reranker quality on near-duplicates, not depth.
+- **The cost is real.** With 33× more same-topic papers, the one you half-remember
+  is outranked more often. Specific questions barely move (100% → 97.6%).
+- **The gain is larger.** Only 3% of the papers now indexed were in the old corpus.
+  For the others, v1 found none of 150 test papers even with its live arXiv
+  fallback, which fired on 8 and found nothing: the gate saw on-topic matches and
+  called the search confident.
+- **The obvious fix doesn't work.** Scoring 150 first-stage candidates instead of
+  60 puts the target in the pool more often (81% → 88% at 123k papers) but
+  recall@10 *drops* at twice the latency. The reranker is the bottleneck, so the
+  next lever is its quality on near-duplicates, not depth.
 
-Scaling also surfaced three bugs, each caught before deployment:
+Scaling surfaced bugs, each caught before deployment:
 
 - **Index caches** were keyed by nothing (BM25) or by document count alone (dense).
-  Both store positions, so the new corpus would have loaded the old index and
+  Both store positions, so a new corpus would have loaded the old index and
   silently mapped every hit to the wrong paper. Both are now fingerprinted to the
-  exact id list.
+  exact id list and rebuild on a mismatch.
 - **Citation title lookup** scanned every title on every call. An inverted index
   with exact pruning returns identical results on 304 real queries, 270× faster.
 - **Title matching** accepted look-alikes. I-JEPA's title, which isn't in the
   corpus, tied three different JEPA papers at 0.82. A local match must now be
-  unambiguous, or the lookup falls through to arXiv/OpenAlex. Recall on noisy
-  citations is unchanged.
+  unambiguous, or the lookup falls through to arXiv/OpenAlex.
+- **OpenAlex rejected every question-form query.** A `?` is a wildcard to its
+  search, so "What is X?" returned a 400, and that error paused the whole source
+  for two minutes. Queries are now sanitised, and a rejected query no longer
+  counts as an outage.
+
+### Answering any AI question
+
+Papers first. When they don't contain the answer, the system says so and falls
+back to the model's own knowledge, labelled as such and uncited, but only for AI
+questions.
+
+```
+answer from the papers  ->  the answerer replies NOT_COVERED when the passages lack it
+general knowledge       ->  one call that is both the scope check and the answer
+                            (OUT_OF_SCOPE for anything not about AI/ML -> declined)
+decline
+```
+
+The `NOT_COVERED` sentinel makes abstention something code can route on, instead of
+prose a weak answer can hide in. Measured with the real model
+(`scripts/eval_general_scope.py`): **30/30** AI concept questions answered,
+**40/40** off-topic questions declined, **0** answers containing a URL or arXiv id.
+Known leak: general programming questions ("what is a Python decorator") are still
+answered about half the time, which costs a few tokens, not correctness.
+
+A reasoning model can spend its whole token budget thinking and return nothing; on
+one AI question it did. Reasoning is now set to low effort (faster, and enough for
+these tasks), and an empty answer moves to the next model instead of becoming an
+error.
+
+### Latency
+
+Profiled stage by stage (`scripts/profile_latency.py`, 307k passages): BM25 ~8 ms,
+query embedding + FAISS 60–85 ms, rank fusion 0.1 ms, **cross-encoder rerank 90 ms
+at 20 candidates and 225 ms at 60** on the GPU, and far more on a CPU. The reranker
+is linear in candidates, so that is the lever:
+
+- **Adaptive rerank:** score the best 15 fused candidates and stop if their top-5
+  mean is already ≥ 0.7; otherwise score the rest. Simulated exactly from one full
+  rerank per query: recall@10 unchanged (98.8% specific, 57.6% vague vs 56.8%),
+  23% fewer candidates scored. The top-5 list matches a full rerank for 84% of
+  queries, so the change isn't invisible, and the setting is a config knob.
+- **Query cache:** every stage is deterministic and the corpus static, so repeats
+  skip search and rerank entirely.
+- **Live search stops waiting for the slowest source** once one has results.
+- **Warm-up query at boot** so the first visitor doesn't pay for it.
+
+On the deployed Space: median search **0.78 s server-side**, **0 ms** when repeated;
+from a browser 2.3 s cold and 1.6 s repeated, of which about 1.5 s is network and
+proxy. It was 3.4 s end to end before (a single sample). These are for the bundled
+8k corpus; the 275k corpus adds vector-search time (139 ms for the dense stage on a
+laptop CPU) that was not measured on the Space itself.
+
+**CPU cost is easy to misjudge.** Reranking 30 passages pinned to 2 threads on the
+laptop took about 42 s, which is simply what ~6 TFLOP costs on 2 cores. The Space
+answers in under a second, so it is evidently not limited to 2 threads, whatever
+its config comment assumed. I never found out how many cores it has, and the live
+measurement above is the number to trust, not a laptop proxy for it.
+
+### Deploying
+
+The 275k corpus with its indices is 1.25 GB, over a free Space's 1 GB repo limit,
+so it lives in a **private dataset repo** and is downloaded when the container
+starts (53 s measured), by `src/api/corpus_fetch.py`:
+
+```bash
+python scripts/publish_corpus.py --repo <you>/researchos-corpus --private   # once
+# then, in the Space's settings, add a secret:  HF_TOKEN = a read token
+```
+
+Without the token the Space does not fail: it says why in `/health`
+(`corpus.reason`) and serves the small corpus bundled with it. Other optional
+secrets: `GROQ_API_KEY` (answers), `OPENALEX_API_KEY` (a free key raises OpenAlex's
+daily budget tenfold), and `FEEDBACK_REPO` + `HF_TOKEN` (keep the feedback database
+across restarts).
 
 ### Code
 
@@ -238,7 +311,7 @@ Scaling also surfaced three bugs, each caught before deployment:
 | `src/data/openalex_source.py` | second live source: budget-aware, time-bounded, circuit-broken |
 | `src/api/db.py`, `src/api/persist.py` | live v2 funnel, label export, restart-proof feedback |
 | `scripts/calibrate_gate.py` | confidence-gate calibration and retrieval regression check |
-| `tests/` | 89 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback, live sources, title index, v2 funnel |
+| `tests/` | 115 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback, live sources, title index, v2 funnel, answer routing, adaptive rerank |
 
 Deviations from the paper, all deliberate: Qwen2.5-1.5B instead of 3B (one 8 GB
 GPU instead of two A100s); stage 2 trains with the verdict pre-filled because the
