@@ -38,6 +38,7 @@ import {
   type Passage,
 } from "@/lib/api";
 import BoxLoader from "@/components/ui/box-loader";
+import MorphOrb, { type MorphOrbHandle } from "@/components/ui/ai-thiking-orb-and-input";
 import { LeaderboardRankings } from "@/components/ui/leaderboard-rankings";
 import {
   addHistory,
@@ -66,8 +67,13 @@ const EXAMPLES: Record<Mode, string[]> = {
 
 export function ResearchConsole() {
   const [mode, setMode] = useState<Mode>("papers");
-  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  // True when the orb is already animating this search, so the page's own
+  // skeleton loader would only be a second spinner under it.
+  const [animated, setAnimated] = useState(false);
+  const orbRef = useRef<MorphOrbHandle>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const [inView, setInView] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [papersResult, setPapersResult] = useState<PapersResult | null>(null);
   const [explainResult, setExplainResult] = useState<ExplainResult | null>(null);
@@ -82,6 +88,18 @@ export function ResearchConsole() {
     setHistory(readHistory());
   }, []);
 
+  // The orb bar belongs to this section: show it while the console is on
+  // screen and let it step aside over the hero.
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), {
+      threshold: 0.05,
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   // The extension hands off here when it cannot draw a panel on the page -
   // Chrome blocks content scripts inside its PDF viewer, which is exactly
   // where papers get read. ?explain=... runs the query on arrival.
@@ -89,7 +107,6 @@ export function ResearchConsole() {
     const handoff = new URLSearchParams(window.location.search).get("explain");
     if (!handoff) return;
     setMode("explain");
-    setInput(handoff);
     // Clear the parameter so a refresh does not silently re-run it.
     window.history.replaceState({}, "", window.location.pathname);
     document.getElementById("console")?.scrollIntoView({ behavior: "smooth" });
@@ -108,23 +125,39 @@ export function ResearchConsole() {
     setError(null);
   }
 
-  async function run(value?: string, retryOf: number | null = null) {
-    const text = (value ?? input).trim();
-    if (text.length < 3 || loading) return;
-    setInput(text);
+  const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+  /** Runs a search. Resolves to one short line for the orb's result card. */
+  async function run(
+    value: string,
+    retryOf: number | null = null,
+    viaOrb = false,
+  ): Promise<string> {
+    const text = value.trim();
+    if (text.length < 3) return "Type at least three characters.";
+    if (loading) return "Still working on the previous search.";
+    setAnimated(viaOrb);
     setLoading(true);
     clear();
     try {
       let summary = "";
+      let spoken = "";
       if (mode === "papers") {
         const res = await findPapers(text, 10, retryOf);
         setPapersResult(res);
         summary = `${res.papers.length} papers`;
+        spoken =
+          res.papers.length === 0
+            ? "Nothing matched that."
+            : !res.confident
+              ? `${res.papers.length} weak matches. Treat them as leads.`
+              : `${res.papers.length} papers found. Top: ${clip(res.papers[0].title, 70)}`;
       } else {
         const res = await explain(text, doc?.document_id, retryOf);
         if (res.resolved) {
           setExplainResult(res);
           summary = res.paper?.title ?? "explained";
+          spoken = `Explained: ${clip(res.paper?.title ?? "that paper", 80)}`;
         } else {
           // /explain already answered a question server-side; use that rather
           // than calling /ask, which re-ran the whole pipeline a second time.
@@ -133,11 +166,20 @@ export function ResearchConsole() {
             : await ask(text, 6, retryOf);
           setAskResult(answered);
           summary = `${answered.distinct_papers} papers`;
+          spoken =
+            answered.source === "general_knowledge"
+              ? "Answered from general knowledge, no citations."
+              : answered.answer
+                ? `Answered from ${answered.distinct_papers} papers.`
+                : "No answer found.";
         }
       }
       setHistory(addHistory({ query: text, mode, summary }));
+      return spoken;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      return `Something went wrong: ${clip(message, 90)}`;
     } finally {
       setLoading(false);
     }
@@ -164,7 +206,11 @@ export function ResearchConsole() {
     papersResult?.query_id ?? explainResult?.query_id ?? askResult?.query_id ?? null;
 
   return (
-    <section id="console" className="mx-auto w-full max-w-5xl px-4 py-16 md:py-24">
+    <section
+      id="console"
+      ref={sectionRef}
+      className="mx-auto w-full max-w-5xl px-4 pt-16 pb-48 md:pt-24 md:pb-56"
+    >
       <header className="mb-8">
         <h2 className="font-serif text-3xl text-white md:text-4xl">Research console</h2>
         <p className="mt-2 text-sm text-slate-400">
@@ -204,81 +250,70 @@ export function ResearchConsole() {
         </ModeButton>
       </div>
 
-      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 backdrop-blur-sm focus-within:border-white/25">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              run();
-            }
-          }}
-          rows={mode === "explain" ? 3 : 2}
-          placeholder={
-            mode === "papers"
-              ? "A topic, e.g. world models for robot manipulation…"
-              : doc
-                ? `Ask anything about "${doc.title.slice(0, 48)}"…`
-                : "Paste a reference, an arXiv id, or ask about a concept…"
-          }
-          className="w-full resize-none bg-transparent px-2 py-1 text-[15px] text-slate-100 placeholder:text-slate-500 focus:outline-none"
-        />
-        {mode === "explain" && doc && (
-          <div className="mx-2 mb-2 flex items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs">
-            <Paperclip size={13} className="shrink-0 text-sky-300" />
-            <span className="min-w-0 flex-1 truncate text-sky-100">
-              Asking about <span className="font-medium">{doc.title}</span>
-            </span>
-            <span className="shrink-0 text-sky-400/70">
-              {doc.n_chunks} passages · {doc.n_words.toLocaleString()} words
-            </span>
-            <button
-              onClick={() => setDoc(null)}
-              className="shrink-0 rounded p-0.5 text-sky-300 transition hover:bg-white/10 hover:text-white"
-              aria-label="Stop using this document"
-            >
-              <X size={13} />
-            </button>
-          </div>
-        )}
-        <div className="flex items-center justify-between px-2 pt-2">
-          <div className="flex items-center gap-3">
-            {mode === "explain" && (
-              <>
-                <input
-                  ref={fileRef}
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="hidden"
-                  onChange={(e) => handleFile(e.target.files?.[0])}
-                />
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  disabled={uploading}
-                  className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-slate-200 disabled:opacity-50"
-                >
-                  {uploading ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Paperclip size={13} />
-                  )}
-                  {uploading ? "Reading PDF…" : doc ? "Replace PDF" : "Attach a PDF"}
-                </button>
-              </>
-            )}
-            <span className="text-xs text-slate-500">Enter to run · Shift+Enter for newline</span>
-          </div>
+      <MorphOrb
+        ref={orbRef}
+        onSubmit={(text) => run(text, null, true)}
+        placeholder={
+          mode === "papers"
+            ? "A topic, e.g. world models for robot manipulation…"
+            : doc
+              ? `Ask anything about "${doc.title.slice(0, 40)}"…`
+              : "Paste a reference, an arXiv id, a DOI, or ask a question…"
+        }
+        maxLength={1000}
+        answerTitle="Results"
+        // The animation's own "thinking" floor is cosmetic (the default is 3.4 s);
+        // the real search sets the pace, with just enough for the labels to turn.
+        minThinkMs={900}
+        speed={1.5}
+        autoResetMs={2600}
+        hidden={!inView}
+      />
+
+      <p className="mb-3 text-xs text-slate-500">
+        Ask in the bar at the bottom of the screen.{" "}
+        {mode === "papers"
+          ? "Describe a topic and get the papers on it."
+          : "Paste a reference, an arXiv id or a DOI, or ask about a concept."}
+      </p>
+
+      {mode === "explain" && (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+          {doc && (
+            <div className="mb-2 flex items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs">
+              <Paperclip size={13} className="shrink-0 text-sky-300" />
+              <span className="min-w-0 flex-1 truncate text-sky-100">
+                Asking about <span className="font-medium">{doc.title}</span>
+              </span>
+              <span className="shrink-0 text-sky-400/70">
+                {doc.n_chunks} passages · {doc.n_words.toLocaleString()} words
+              </span>
+              <button
+                onClick={() => setDoc(null)}
+                className="shrink-0 rounded p-0.5 text-sky-300 transition hover:bg-white/10 hover:text-white"
+                aria-label="Stop using this document"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            className="hidden"
+            onChange={(e) => handleFile(e.target.files?.[0])}
+          />
           <button
-            onClick={() => run()}
-            disabled={loading || !status || input.trim().length < 3}
-            className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-slate-200 disabled:opacity-50"
           >
-            <Search size={15} />
-            {mode === "papers" ? "Find papers" : doc ? "Ask this paper" : "Explain"}
+            {uploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+            {uploading ? "Reading PDF…" : doc ? "Replace PDF" : "Attach a PDF to ask about it"}
           </button>
         </div>
-      </div>
+      )}
 
       <div className="mt-3 flex flex-wrap gap-2">
         {(mode === "explain" && doc
@@ -287,7 +322,7 @@ export function ResearchConsole() {
         ).map((ex) => (
           <button
             key={ex}
-            onClick={() => run(ex)}
+            onClick={() => orbRef.current?.submit(ex)}
             className="max-w-full truncate rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/25 hover:text-slate-200"
           >
             {ex.length > 64 ? `${ex.slice(0, 64)}…` : ex}
@@ -314,7 +349,7 @@ export function ResearchConsole() {
                 key={h.id}
                 onClick={() => {
                   setMode(h.mode);
-                  run(h.query);
+                  void run(h.query);
                 }}
                 title={`${h.summary ?? ""} · ${relativeTime(h.at)}`}
                 className="group inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/5 bg-white/[0.02] px-2.5 py-1 text-xs text-slate-400 transition hover:border-white/20 hover:text-slate-200"
@@ -329,7 +364,7 @@ export function ResearchConsole() {
         </div>
       )}
 
-      {loading && (
+      {loading && !animated && (
         <div className="mt-10 flex flex-col items-center gap-6 py-10">
           <BoxLoader />
           <p className="text-sm text-slate-400">

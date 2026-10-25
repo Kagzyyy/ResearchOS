@@ -143,3 +143,415 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .boxes .box { animation: none; }
 }
+
+
+/* ═══════════════════════════ MorphOrb ═══════════════════════════
+   Styles for components/ui/ai-thiking-orb-and-input.tsx. The component drives
+   most of this through CSS variables on .mo-actor (--w --h --r and the --o*
+   opacity channels) so every frame is one style write; this file only says what
+   each layer looks like. Dark-only, like the rest of the site. */
+
+@property --angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes mo-spin { to { --angle: 360deg; } }
+@keyframes mo-drift { from { transform: translateX(-14%); } to { transform: translateX(14%); } }
+@keyframes mo-shimmer { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+@keyframes mo-dot { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+@keyframes mo-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes mo-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-6px); } }
+@keyframes mo-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mo-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes mo-shake {
+  0%, 100% { transform: translate(-50%, -50%); }
+  25% { transform: translate(calc(-50% - 4px), -50%); }
+  75% { transform: translate(calc(-50% + 4px), -50%); }
+}
+
+/* A fixed layer over the page that never blocks it: only the bar, the card and
+   the reset button take pointer events, so the page still scrolls and clicks
+   through everywhere else. */
+.mo-root {
+  --oCenter: 0;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  color: #ededed;
+  transition: opacity 0.35s ease;
+}
+/* Away from the section it belongs to, the idle bar steps aside. A running
+   animation is never hidden (data-phase is anything but idle then). */
+.mo-root[data-hidden="true"][data-phase="idle"] { opacity: 0; }
+.mo-root[data-hidden="true"][data-phase="idle"] .mo-input { pointer-events: none; }
+
+/* While the orb is up the page behind it dims, driven by the same value that
+   brightens the halo. */
+.mo-bg {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(60% 52% at 50% 46%, rgba(4, 4, 8, 0.78), rgba(4, 4, 8, 0) 72%);
+  opacity: calc(var(--oCenter, 0) / 0.6);
+}
+.mo-halo {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 560px;
+  height: 560px;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(closest-side, rgba(99, 102, 241, 0.22), rgba(52, 211, 153, 0.08) 55%, transparent);
+  opacity: var(--oCenter, 0);
+}
+
+/* Origin of every motion: the stage centre. JS translates this to fly the bar
+   up from the bottom and back. */
+.mo-mover {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.mo-trail {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.85), rgba(165, 180, 252, 0.5) 55%, rgba(99, 102, 241, 0.18));
+  filter: blur(3px);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.001);
+  will-change: transform, opacity;
+}
+
+/* The one shape that morphs: pill -> ball -> orb -> green dot -> card. */
+.mo-actor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--w, 560px);
+  height: var(--h, 60px);
+  border-radius: var(--r, 999px);
+  transform: translate(-50%, -50%) scale(var(--cs, 1));
+}
+.mo-actor[data-shake] { animation: mo-shake 0.26s ease; }
+.mo-actor > * { position: absolute; }
+
+.mo-underglow {
+  left: 8%;
+  right: 8%;
+  bottom: -14px;
+  height: 28px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(99, 102, 241, 0.6), rgba(52, 211, 153, 0.28) 60%, transparent);
+  filter: blur(14px);
+  opacity: var(--oGlow, 1);
+  transition: filter 0.3s ease;
+}
+.mo-actor[data-typing] .mo-underglow { filter: blur(12px) brightness(1.6); }
+
+.mo-halo-green {
+  inset: -60px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(52, 211, 153, 0.6), rgba(52, 211, 153, 0));
+  filter: blur(6px);
+  opacity: var(--oHalo, 0);
+}
+
+.mo-surface {
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  background: rgba(12, 13, 18, 0.84);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 14px 44px -12px rgba(0, 0, 0, 0.7);
+  opacity: var(--oPill, 1);
+  transition: box-shadow 0.2s ease;
+}
+.mo-actor[data-flash] .mo-surface {
+  box-shadow: inset 0 0 0 1.5px rgba(248, 113, 113, 0.85), 0 14px 44px -12px rgba(0, 0, 0, 0.7);
+}
+.mo-aurora {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  opacity: var(--oAur, 1);
+}
+.mo-aurora i {
+  position: absolute;
+  top: -40%;
+  width: 50%;
+  height: 180%;
+  border-radius: 50%;
+  filter: blur(30px);
+  opacity: 0.26;
+  animation: mo-drift 8s ease-in-out infinite alternate;
+  transition: opacity 0.3s ease;
+}
+.mo-aurora i:nth-child(1) { left: -6%; background: #6366f1; }
+.mo-aurora i:nth-child(2) { left: 18%; background: #34d399; animation-duration: 10s; animation-delay: -3s; }
+.mo-aurora i:nth-child(3) { left: 42%; background: #38bdf8; animation-duration: 9s; animation-delay: -5s; }
+.mo-aurora i:nth-child(4) { left: 64%; background: #a78bfa; animation-duration: 12s; animation-delay: -2s; }
+.mo-actor[data-typing] .mo-aurora i { opacity: 0.46; }
+
+/* A soft ball: what the bar shrinks into before the dotted orb takes over. */
+.mo-ball {
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 36% 30%, #ffffff, #c7cdfd 42%, #6366f1 100%);
+  box-shadow: 0 0 34px rgba(165, 180, 252, 0.5);
+  opacity: var(--oBall, 0);
+}
+.mo-green {
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 36% 30%, #bbf7d0, #34d399 55%, #059669);
+  box-shadow: 0 0 44px rgba(52, 211, 153, 0.65);
+  transform: scale(var(--gs, 0.55));
+  opacity: var(--oGreen, 0);
+}
+.mo-card {
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(14, 15, 20, 0.95);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 26px 60px -22px rgba(0, 0, 0, 0.75),
+    0 0 calc(var(--bloom, 1) * 46px) -10px rgba(52, 211, 153, 0.4);
+  opacity: var(--oCard, 0);
+}
+
+/* A slow light travelling round the bar's edge while it waits. */
+.mo-ring {
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--angle), transparent 0 55%, rgba(165, 180, 252, 0.7) 78%, rgba(52, 211, 153, 0.85) 90%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: mo-spin 6s linear infinite;
+  opacity: var(--oRing, 1);
+  pointer-events: none;
+}
+
+.mo-input {
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 18px;
+  margin: 0;
+  opacity: var(--oInput, 1);
+  transform: scale(var(--inScale, 1));
+  pointer-events: auto;
+}
+.mo-input[inert] { pointer-events: none; }
+.mo-spark { flex: none; width: 20px; height: 20px; color: rgba(255, 255, 255, 0.5); }
+.mo-field {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: #f4f4f6;
+  /* 16px: anything smaller makes iOS zoom the page on focus. */
+  font: inherit;
+  font-size: 16px;
+  letter-spacing: 0.005em;
+}
+.mo-field::placeholder { color: rgba(255, 255, 255, 0.4); }
+.mo-send {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+}
+.mo-send svg { width: 20px; height: 20px; }
+.mo-send[data-ready] { background: #ffffff; color: #0a0a0a; }
+.mo-send:hover { transform: scale(1.06); }
+.mo-send:focus-visible,
+.mo-reset:focus-visible { outline: 2px solid rgba(165, 180, 252, 0.9); outline-offset: 2px; }
+
+.mo-orb {
+  left: 50%;
+  top: 50%;
+  width: 220px;
+  height: 220px;
+  margin: -110px 0 0 -110px;
+  pointer-events: none;
+}
+.mo-pulse {
+  left: 50%;
+  top: 50%;
+  width: 132px;
+  height: 132px;
+  margin: -66px 0 0 -66px;
+  border-radius: 50%;
+  border: 2px solid rgba(52, 211, 153, 0.85);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mo-answer {
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px;
+  overflow: hidden;
+  border-radius: inherit;
+  opacity: var(--hOp, 0);
+  outline: none;
+  pointer-events: none;
+}
+.mo-root[data-phase="answered"] .mo-answer { pointer-events: auto; }
+.mo-a-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+.mo-a-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 10px #34d399;
+  transform: scale(var(--dotS, 0));
+}
+.mo-a-body {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: #ececf1;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Words start hidden; the runtime fades them in one by one. */
+.mo-w { display: inline-block; opacity: 0; }
+
+/* "Thinking…" under the orb. The shimmer is the text clipped to a moving
+   gradient; the previous label slides out while the next slides in. */
+.mo-status {
+  position: absolute;
+  left: 50%;
+  top: calc(46% + 106px);
+  width: 280px;
+  height: 24px;
+  transform: translate(-50%, calc(var(--sTy, 0) * 1px));
+  opacity: var(--sOp, 0);
+  text-align: center;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.mo-lab {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+.mo-in { animation: mo-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.mo-out { animation: mo-out 0.3s ease both; }
+.mo-lab-t {
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.4) 30%, #ffffff 50%, rgba(255, 255, 255, 0.4) 70%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: mo-shimmer 2.2s linear infinite;
+}
+.mo-dots { display: inline-flex; gap: 3px; margin-left: 5px; color: rgba(255, 255, 255, 0.6); }
+.mo-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: mo-dot 1.2s ease-in-out infinite;
+}
+.mo-dots i:nth-child(2) { animation-delay: 0.15s; }
+.mo-dots i:nth-child(3) { animation-delay: 0.3s; }
+.mo-lab-done { color: #6ee7b7; }
+
+.mo-reset {
+  position: absolute;
+  left: 50%;
+  top: calc(46% + 82px);
+  transform: translateX(-50%);
+  padding: 7px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(14, 15, 20, 0.85);
+  color: rgba(255, 255, 255, 0.75);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+.mo-reset:hover { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+.mo-root[data-phase="answered"] .mo-reset {
+  animation: mo-fade-in 0.4s 0.15s ease both;
+  pointer-events: auto;
+}
+
+.mo-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.mo-debug {
+  position: fixed;
+  left: 12px;
+  top: 12px;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #ccc;
+  font-size: 12px;
+  pointer-events: auto;
+}
+.mo-chip { padding: 2px 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); }
+
+@media (prefers-reduced-motion: reduce) {
+  .mo-aurora i, .mo-ring, .mo-lab-t, .mo-dots i { animation: none; }
+  .mo-in, .mo-out { animation-duration: 0.01s; }
+}
