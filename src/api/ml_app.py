@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from src.api import persist
+from src.api.corpus_fetch import ensure_corpus
 from src.api.db import FeedbackLog
 from src.api.llm import is_configured
 from src.api.ml_pipeline import MLPipeline
@@ -50,7 +51,9 @@ def build_state() -> None:
     """
     cfg = load_config(CONFIG_PATH)
     state["cfg"] = cfg
+    state["corpus_info"] = ensure_corpus(cfg)      # may repoint cfg["paths"] at the fallback
     state["pipeline"] = MLPipeline(cfg)
+    state["pipeline"].warmup()
     persist.restore(cfg["paths"]["feedback_db"])      # before the DB is opened
     state["log"] = FeedbackLog(cfg["paths"]["feedback_db"])
     persist.start_sync(cfg["paths"]["feedback_db"])
@@ -152,6 +155,8 @@ def health() -> dict[str, Any]:
         "rate_limit_per_minute": rate_limit_per_minute(),
         # Live sources are optional enrichments; this says which are usable
         # right now and how much of OpenAlex's daily budget is left.
+        "corpus": {**state.get("corpus_info", {}), "cache_hits": getattr(pipeline, "cache_hits", 0),
+                   "early_exits": getattr(pipeline, "early_exits", 0)},
         "live_sources": {
             "arxiv": {"available": not arxiv_breaker_open()},
             "openalex": openalex_status(),

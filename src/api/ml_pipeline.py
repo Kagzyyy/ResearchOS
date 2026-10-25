@@ -38,11 +38,15 @@ from __future__ import annotations
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor
+from concurrent.futures import wait as _futures_wait
 from typing import Any
 
 from src.api.diagnose import diagnose
-from src.api.llm import explain_paper, generate_answer, is_configured
+from src.api.llm import (
+    explain_paper, general_answer, generate_answer, is_configured, is_not_covered,
+)
 from src.config import device
 from src.data.arxiv_source import (
     ArxivUnavailable, Paper, fetch_metadata_bounded, read_papers,
@@ -60,6 +64,8 @@ PSEUDO_QID = "q"
 # Live sources run side by side under one deadline; their own clients bound
 # each call, so this pool only has to hold the two waits of one request.
 _LIVE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="live-search")
+_SEARCH_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="first-stage")
+RANK_CACHE_MAX = 512
 
 
 def _dedup_key(item: dict[str, Any]) -> str:
@@ -91,6 +97,15 @@ class MLPipeline:
 
         # Full paper records, for citation resolution and metadata display.
         self.papers_by_id = {p.paper_id: vars(p) for p in read_papers(paths["papers"])}
+
+        # An abstract-only paper holds its abstract twice - once in its paper
+        # record, once as its single passage - as two equal strings. At 270k
+        # papers that is ~400 MB of RAM for nothing. Point both at one object.
+        for entry in self.corpus.values():
+            if entry["section"] == "abstract":
+                record = self.papers_by_id.get(entry["paper_id"])
+                if record is not None and record.get("abstract") == entry["text"]:
+                    entry["text"] = record["abstract"]
 
         doc_ids = list(self.corpus.keys())
         doc_texts = [
@@ -134,10 +149,28 @@ class MLPipeline:
         self._gpu_lock = threading.Lock()
         self.rrf_k = rc["fusion"]["rrf_k"]
         self.retrieve_k = rc["top_k"]
+        self._rank_cache: OrderedDict[str, dict[str, float]] = OrderedDict()
+        self._cache_lock = threading.Lock()
+        self.cache_hits = 0
+        self.early_exits = 0
         print(
             f"[ml] ready | {len(self.corpus)} chunks from {len(self.papers_by_id)} papers "
             f"| reranker={mc['model']} | llm={'groq' if is_configured() else 'disabled'}"
         )
+
+    def warmup(self) -> None:
+        """Run one throwaway query so the first real user does not pay for it.
+
+        The first call into torch, faiss and the tokenizers allocates buffers
+        and compiles kernels; on a CPU container that is seconds the first
+        visitor would otherwise sit through. The result is cached, harmlessly.
+        """
+        t0 = time.perf_counter()
+        try:
+            self._ranked("how do transformers use attention for language modelling")
+            print(f"[ml] warmed up in {time.perf_counter() - t0:.1f}s", flush=True)
+        except Exception as exc:  # noqa: BLE001 - warmup is an optimisation only
+            print(f"[ml] warmup skipped ({type(exc).__name__})", flush=True)
 
     # ---------------------------------------------------------------- helpers
 
@@ -164,18 +197,75 @@ class MLPipeline:
 
     # ------------------------------------------------------------- retrieval
 
-    def retrieve(self, question: str, top_k: int | None = None) -> list[dict[str, Any]]:
-        """Hybrid retrieve, fuse, rerank, then cap chunks per paper."""
+    def _ranked(self, question: str) -> dict[str, float]:
+        """Reranked candidate chunks for a query: {chunk_id: score}.
+
+        The one place a query is searched, so every endpoint shares its two
+        latency wins:
+
+        * BM25 and dense search run side by side. They are independent, and
+          both spend their time in native code (numpy, faiss, torch) that
+          releases the GIL, so the cost is the slower of the two, not the sum.
+        * Results are cached. The corpus is static and every stage is
+          deterministic, so a repeated query - a demo, a retry, /papers then
+          /ask on the same text, a shared link - skips search AND the
+          reranker, which is the dominant cost on CPU.
+        """
+        key = " ".join(question.lower().split())
+        with self._cache_lock:
+            hit = self._rank_cache.get(key)
+            if hit is not None:
+                self._rank_cache.move_to_end(key)
+                self.cache_hits += 1
+                return dict(hit)
         query_map = {PSEUDO_QID: question}
         with self._gpu_lock:
-            bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
+            bm25_future = _SEARCH_POOL.submit(self.bm25.search, query_map, self.retrieve_k)
             dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
             fused = reciprocal_rank_fusion(
-                [bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k
+                [bm25_future.result(), dense_run], k=self.rrf_k, top_k=self.retrieve_k
             )
-            reranked, _ = self.reranker.rerank(
-                query_map, fused, self.corpus, top_k=self.retrieve_k
-            )
+            ranked = self._rerank_adaptive(query_map, fused[PSEUDO_QID])
+        with self._cache_lock:
+            self._rank_cache[key] = dict(ranked)
+            while len(self._rank_cache) > RANK_CACHE_MAX:
+                self._rank_cache.popitem(last=False)
+        return ranked
+
+    def _rerank_adaptive(self, query_map: dict[str, str], fused: dict[str, float]) -> dict[str, float]:
+        """Cross-encoder scores for the fused candidates, stopping early when sure.
+
+        The cross-encoder is the dominant cost of a search and scales with the
+        candidates scored (seconds on a 2-vCPU CPU). Score the best `first`
+        fused candidates; if their top-5 mean already clears `tau`, the answer
+        is obvious and the remaining candidates are not worth scoring.
+        Otherwise score the rest, so a hard query still sees every candidate.
+
+        Measured offline (scripts/eval_early_exit.py): recall@10 unchanged,
+        ~27% fewer candidates scored.
+        """
+        ee = self.cfg["retrieval"].get("early_exit")
+        if not ee or len(fused) <= ee["first"]:
+            reranked, _ = self.reranker.rerank(query_map, {PSEUDO_QID: fused}, self.corpus,
+                                               top_k=self.retrieve_k)
+            return reranked[PSEUDO_QID]
+        order = sorted(fused.items(), key=lambda kv: kv[1], reverse=True)
+        head = dict(order[: ee["first"]])
+        scores, _ = self.reranker.rerank(query_map, {PSEUDO_QID: head}, self.corpus,
+                                         top_k=len(head))
+        scores = scores[PSEUDO_QID]
+        top = sorted(scores.values(), reverse=True)[:5]
+        if sum(top) / len(top) >= ee["tau"]:
+            self.early_exits += 1
+            return scores
+        tail = dict(order[ee["first"]:])
+        rest, _ = self.reranker.rerank(query_map, {PSEUDO_QID: tail}, self.corpus,
+                                       top_k=len(tail))
+        return {**scores, **rest[PSEUDO_QID]}
+
+    def retrieve(self, question: str, top_k: int | None = None) -> list[dict[str, Any]]:
+        """Hybrid retrieve, fuse, rerank, then cap chunks per paper."""
+        reranked = {PSEUDO_QID: self._ranked(question)}
 
         ac = self.cfg["answer"]
         selected = cap_per_paper(
@@ -201,17 +291,7 @@ class MLPipeline:
         one, which inverts what you actually want from a search result.
         """
         start = time.perf_counter()
-        query_map = {PSEUDO_QID: topic}
-
-        with self._gpu_lock:
-            bm25_run = self.bm25.search(query_map, top_k=self.retrieve_k)
-            dense_run = self.dense.search(query_map, top_k=self.retrieve_k)
-            fused = reciprocal_rank_fusion(
-                [bm25_run, dense_run], k=self.rrf_k, top_k=self.retrieve_k
-            )
-            reranked, _ = self.reranker.rerank(
-                query_map, fused, self.corpus, top_k=self.retrieve_k
-            )
+        reranked = {PSEUDO_QID: self._ranked(topic)}
 
         grouped: dict[str, dict[str, Any]] = {}
         for chunk_id, score in reranked[PSEUDO_QID].items():
@@ -437,12 +517,28 @@ class MLPipeline:
         if "openalex" in sources:
             jobs["openalex"] = _LIVE_POOL.submit(self._live_openalex, question, top_k, deadline)
 
+        # Do not wait for the slowest source. Once one has results, the other
+        # gets a short grace and is then left behind: arXiv often takes 3-5 s
+        # while OpenAlex answers in ~1 s, and its extra papers are not worth
+        # holding the whole response. A source that returns nothing (down,
+        # paused, empty) does not start the clock - the other keeps its full
+        # budget.
+        grace = float(self.cfg["citation"].get("live_grace_s", 0.75))
         found: dict[str, list[dict[str, Any]]] = {}
-        for name, job in jobs.items():
-            try:
-                found[name] = job.result(timeout=max(deadline - time.monotonic(), 0.05))
-            except Exception:  # noqa: BLE001 - a failed source is an empty source
-                found[name] = []
+        name_of = {job: name for name, job in jobs.items()}
+        pending = set(jobs.values())
+        cutoff = deadline
+        while pending and time.monotonic() < cutoff:
+            done, pending = _futures_wait(
+                pending, timeout=max(cutoff - time.monotonic(), 0.01),
+                return_when=FIRST_COMPLETED)
+            for job in done:
+                try:
+                    found[name_of[job]] = job.result()
+                except Exception:  # noqa: BLE001 - a failed source is an empty source
+                    found[name_of[job]] = []
+                if found[name_of[job]]:
+                    cutoff = min(cutoff, time.monotonic() + grace)
 
         merged: list[dict[str, Any]] = []
         seen: dict[str, dict[str, Any]] = {}
@@ -601,22 +697,43 @@ class MLPipeline:
                 elif not confident:
                     passages = []                        # genuinely unanswerable
 
-        if not passages:
-            answer_text = (
-                "Nothing answers that - not in the local corpus, and not in a live "
-                "arXiv search either. If this is an AI/ML topic the paper may simply "
-                "be too new or too obscure; if it is not, this tool only covers arXiv."
-            )
-        elif generate:
+        # Answer from the papers when they cover the question. When they do
+        # not - nothing retrieved, or the answerer replies NOT_COVERED - fall
+        # back to the model's own knowledge, but only for AI questions and
+        # labelled as not grounded in the papers. Everything else is declined.
+        grounded = True
+        uncovered = not passages
+        if passages and generate:
             gen_start = time.perf_counter()
             answer_text = generate_answer(
                 question, passages, model=self._answer_models(), max_tokens=ac["max_tokens"]
             )
             generation_ms = (time.perf_counter() - gen_start) * 1000.0
+            if is_not_covered(answer_text):
+                uncovered, answer_text = True, None
+        if uncovered and generate and ac.get("general_knowledge", True):
+            gen_start = time.perf_counter()
+            try:
+                general = general_answer(question, model=self._answer_models(),
+                                         max_tokens=ac["max_tokens"])
+            except Exception as exc:  # noqa: BLE001 - fall back to the plain decline
+                print(f"[ml] general answer failed ({type(exc).__name__})", flush=True)
+                general = None
+            generation_ms += (time.perf_counter() - gen_start) * 1000.0
+            if general:
+                answer_text, source, grounded, confident = general, "general_knowledge", False, False
+        if uncovered and answer_text is None:
+            answer_text = (
+                "Nothing answers that - not in the local corpus, and not in a live "
+                "arXiv search either. If this is an AI/ML topic the paper may simply "
+                "be too new or too obscure; if it is not, this tool only covers AI research."
+                if not passages else
+                "The papers found for this do not contain an answer to it."
+            )
 
         # v2: the gate fired and nothing rescued it, so say what went wrong.
         diagnosis, diagnosis_ms = None, 0.0
-        if not passages:
+        if not passages and source != "general_knowledge":
             diagnosis, diagnosis_ms = self._diagnose(question, corpus_passages, None)
 
         return {
@@ -624,6 +741,7 @@ class MLPipeline:
             "answer": answer_text,
             "confident": confident,
             "source": source,
+            "grounded": grounded,
             "top_score": round(best, 3),
             "mean_top_score": round(mean_top, 3),
             "citations": passages,

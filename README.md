@@ -2,8 +2,9 @@
 
 A research engine for AI/ML papers: describe a topic, paste a half-remembered
 citation, or upload a PDF, and get ranked papers and grounded answers over
-**8,330 arXiv papers (40,379 passages)**. When it can't find good evidence, it
-says so and explains what went wrong instead of guessing.
+**122,952 AI papers (155,001 passages)**, plus live arXiv and OpenAlex search for
+anything outside them. When it can't find good evidence, it says so and explains
+what went wrong instead of guessing.
 
 **Live:** [researchos-brown.vercel.app](https://researchos-brown.vercel.app) ·
 backend on a free [Hugging Face Space](https://huggingface.co/spaces/Kagzy/ResearchOS) ·
@@ -185,6 +186,48 @@ PageRank query ranked a Spanish thesis and a course page above the PageRank pape
 itself. Semantic Scholar was evaluated and left out, because its keyless API refused
 every request.
 
+### Growing the corpus 15×
+
+v1 indexed 8,330 papers with full text. v3 adds **114,622 abstracts** of every
+arXiv paper first submitted from January 2024 to September 2025 in cs.LG, CV,
+CL, AI, RO, IR, NE and stat.ML. They're harvested through arXiv's OAI-PMH
+bulk interface (resumable, checkpointed per page) and merged by
+`scripts/build_corpus.py`. Indexing 155k passages takes 16 minutes on the
+laptop GPU and is shipped prebuilt, so the Space never embeds anything at boot.
+It serves in about 3 GB of RAM.
+
+A bigger corpus isn't automatically better, so both sides were measured before
+it shipped:
+
+| Vague, half-remembered query for… | 8k corpus | 123k corpus |
+|---|---|---|
+| a paper in the old corpus (250 queries) | 83.2% | 65.2% |
+| a paper only the new corpus has (150 queries) | **0%** | **54.7%** [46.7, 62.4] |
+
+- **The cost is real.** With 15× more same-topic papers, the one you half-remember
+  is outranked more often. Specific questions barely move (100% → 99.4%).
+- **The gain is much larger.** v1's live arXiv fallback never fired on these
+  queries: its gate saw on-topic matches and called the search confident. For a
+  random 2024–25 AI paper, only about 7% of which were in the old corpus,
+  findability goes from roughly 6% to roughly 55%.
+- **The obvious fix doesn't work.** Retrieving 150 first-stage candidates instead of
+  60 puts the target in the pool more often (81% → 88%), but recall@10 *drops*
+  (65.2% → 63.2%) at twice the latency. The reranker is the bottleneck, so the
+  next lever is reranker quality on near-duplicates, not depth.
+
+Scaling also surfaced three bugs, each caught before deployment:
+
+- **Index caches** were keyed by nothing (BM25) or by document count alone (dense).
+  Both store positions, so the new corpus would have loaded the old index and
+  silently mapped every hit to the wrong paper. Both are now fingerprinted to the
+  exact id list.
+- **Citation title lookup** scanned every title on every call. An inverted index
+  with exact pruning returns identical results on 304 real queries, 270× faster.
+- **Title matching** accepted look-alikes. I-JEPA's title, which isn't in the
+  corpus, tied three different JEPA papers at 0.82. A local match must now be
+  unambiguous, or the lookup falls through to arXiv/OpenAlex. Recall on noisy
+  citations is unchanged.
+
 ### Code
 
 | | |
@@ -195,7 +238,7 @@ every request.
 | `src/data/openalex_source.py` | second live source: budget-aware, time-bounded, circuit-broken |
 | `src/api/db.py`, `src/api/persist.py` | live v2 funnel, label export, restart-proof feedback |
 | `scripts/calibrate_gate.py` | confidence-gate calibration and retrieval regression check |
-| `tests/` | 87 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback, live sources, title index, v2 funnel |
+| `tests/` | 89 offline tests: rewards, GRPO advantages, evaluation, diagnosis rails, model fallback, live sources, title index, v2 funnel |
 
 Deviations from the paper, all deliberate: Qwen2.5-1.5B instead of 3B (one 8 GB
 GPU instead of two A100s); stage 2 trains with the verdict pre-filled because the

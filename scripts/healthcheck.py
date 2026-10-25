@@ -182,6 +182,32 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             checks.record(label, FAIL, f"{type(exc).__name__}: {exc}")
 
+    # --- any AI question gets an answer; anything else is declined ----------------
+    if not generation:
+        checks.record("answers a general AI question", SKIP, "no API key")
+        checks.record("declines a non-AI question", SKIP, "no API key")
+    else:
+        try:
+            result = checks.post("/ask", {"query": "What is the bias-variance tradeoff in "
+                                                   "machine learning?", "top_k": 4})
+            text = result.get("answer") or ""
+            ok = len(text) > 200 and not text.startswith(("Nothing answers", "The papers found"))
+            # Whichever path answered, the label must match it.
+            honest = (result.get("source") == "general_knowledge") == (result.get("grounded") is False)
+            checks.record("answers a general AI question", PASS if ok and honest else FAIL,
+                          f"source={result.get('source')}, grounded={result.get('grounded')}, "
+                          f"{result['timing_ms']['total'] / 1000:.1f}s")
+        except Exception as exc:  # noqa: BLE001
+            checks.record("answers a general AI question", FAIL, f"{type(exc).__name__}: {exc}")
+        try:
+            result = checks.post("/ask", {"query": "How long should sourdough bread proof "
+                                                   "in the fridge?", "top_k": 4})
+            declined = result.get("source") != "general_knowledge" and not result.get("citations")
+            checks.record("declines a non-AI question", PASS if declined else FAIL,
+                          f"source={result.get('source')}")
+        except Exception as exc:  # noqa: BLE001
+            checks.record("declines a non-AI question", FAIL, f"{type(exc).__name__}: {exc}")
+
     # --- a DOI-only paper: the reason OpenAlex is a live source ---------------
     sources = health.get("live_sources", {})
     if not sources:

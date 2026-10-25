@@ -63,6 +63,10 @@ export interface AskResult {
   generation_configured: boolean;
   timing_ms: { retrieval_and_rerank: number; generation: number; total: number };
   diagnosis?: Diagnosis | null;
+  /** "corpus" | "arxiv_live" | "corpus+arxiv_live" | "general_knowledge" | "upload" */
+  source?: string;
+  /** False when the answer is the model's own knowledge, not drawn from the papers. */
+  grounded?: boolean;
 }
 
 export interface PaperMeta {

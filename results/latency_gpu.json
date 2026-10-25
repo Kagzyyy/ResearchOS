@@ -1,0 +1,85 @@
+{
+  "config": "configs/ml.yaml",
+  "threads": null,
+  "load_s": 43.3,
+  "papers": 274916,
+  "passages": 306965,
+  "depths": {
+    "60": {
+      "bm25": {
+        "median": 8.5,
+        "p95": 11.9
+      },
+      "dense": {
+        "median": 66.5,
+        "p95": 202.6
+      },
+      "fuse": {
+        "median": 0.1,
+        "p95": 0.1
+      },
+      "rerank": {
+        "median": 225.4,
+        "p95": 228.3
+      },
+      "total": {
+        "median": 299.5,
+        "p95": 437.5
+      },
+      "recall_at_10_specific": 0.9755,
+      "recall_at_10_vague": 0.58
+    },
+    "30": {
+      "bm25": {
+        "median": 9.3,
+        "p95": 13.9
+      },
+      "dense": {
+        "median": 86.3,
+        "p95": 102.3
+      },
+      "fuse": {
+        "median": 0.1,
+        "p95": 0.2
+      },
+      "rerank": {
+        "median": 135.7,
+        "p95": 159.6
+      },
+      "total": {
+        "median": 235.0,
+        "p95": 257.4
+      },
+      "recall_at_10_specific": 0.9877,
+      "recall_at_10_vague": 0.568
+    },
+    "20": {
+      "bm25": {
+        "median": 7.4,
+        "p95": 8.8
+      },
+      "dense": {
+        "median": 59.4,
+        "p95": 78.9
+      },
+      "fuse": {
+        "median": 0.1,
+        "p95": 0.1
+      },
+      "rerank": {
+        "median": 86.9,
+        "p95": 87.9
+      },
+      "total": {
+        "median": 153.1,
+        "p95": 174.7
+      },
+      "recall_at_10_specific": 0.9877,
+      "recall_at_10_vague": 0.54
+    }
+  },
+  "repeat_query_ms": {
+    "cold": 148.7,
+    "cached": 0.1
+  }
+}

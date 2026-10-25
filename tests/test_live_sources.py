@@ -160,6 +160,33 @@ def test_slow_source_does_not_extend_the_budget():
     assert [p["paper_id"] for p in out] == ["1"]
 
 
+def test_fast_source_is_not_held_for_a_slow_one():
+    """OpenAlex answered; arXiv needs 3 s. Return after the grace, not the 3 s."""
+    def slow_arxiv(q, k, d):
+        time.sleep(3.0)
+        return [_live("9", "Late arXiv paper", "arxiv")]
+    fake = _fake_pipeline([], [_live("openalex:W1", "Fast OpenAlex paper", "openalex")])
+    fake._live_arxiv = slow_arxiv
+    fake.cfg = {"citation": {"live_budget_s": 5.0, "live_grace_s": 0.3,
+                             "live_sources": ["arxiv", "openalex"]}}
+    t0 = time.time()
+    out = MLPipeline.search_live(fake, "q")
+    assert time.time() - t0 < 1.5, "should not wait out the slow source"
+    assert [p["paper_id"] for p in out] == ["openalex:W1"]
+
+
+def test_empty_source_does_not_cut_the_other_short():
+    """A source that returns nothing must not start the grace clock."""
+    def slow_arxiv(q, k, d):
+        time.sleep(0.8)
+        return [_live("9", "Late but useful", "arxiv")]
+    fake = _fake_pipeline([], [])
+    fake._live_arxiv = slow_arxiv
+    fake.cfg = {"citation": {"live_budget_s": 3.0, "live_grace_s": 0.1,
+                             "live_sources": ["arxiv", "openalex"]}}
+    assert [p["paper_id"] for p in MLPipeline.search_live(fake, "q")] == ["9"]
+
+
 # -------------------------------------------------------------- citations ----
 def test_citation_shapes_regression():
     """These patterns once held literal backspaces instead of \\b and matched nothing."""

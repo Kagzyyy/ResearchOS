@@ -1,0 +1,28 @@
+{
+  "ai_questions": 30,
+  "ai_answered": 30,
+  "ai_answered_rate": 1.0,
+  "ai_answered_ci95": [
+    0.8865,
+    1.0
+  ],
+  "off_topic": 40,
+  "off_topic_answered": 0,
+  "off_topic_declined_rate": 1.0,
+  "off_topic_declined_ci95": [
+    0.9124,
+    1.0
+  ],
+  "answers_with_a_url_or_arxiv_id": 0,
+  "median_answer_words": 419,
+  "borderline": {
+    "How do I write a SQL join?": false,
+    "What is a Python decorator?": true,
+    "Explain big-O notation.": true,
+    "Is it ethical for AI to replace workers?": true,
+    "What is the current stock price of Nvidia?": false
+  },
+  "off_topic_wrongly_answered": [],
+  "ai_wrongly_declined": [],
+  "flagged_citations": []
+}

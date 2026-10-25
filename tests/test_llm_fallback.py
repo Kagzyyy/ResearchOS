@@ -82,12 +82,33 @@ def test_non_transient_error_is_not_masked():
         pass
 
 
-def test_qwen_hides_reasoning_gpt_oss_untouched():
+def test_reasoning_models_are_asked_to_think_little():
     _, calls = _with({"qwen/x": "ok"}, lambda: llm._complete("s", "u", "qwen/x", 100, 0.0))
     assert calls[0][1] == {"reasoning_format": "hidden"}
     _, calls = _with({"openai/gpt-oss-20b": "ok"},
                      lambda: llm._complete("s", "u", "openai/gpt-oss-20b", 100, 0.0))
+    assert calls[0][1] == {"reasoning_effort": "low"}
+    _, calls = _with({"other/model": "ok"},
+                     lambda: llm._complete("s", "u", "other/model", 100, 0.0))
     assert calls[0][1] == {}
+
+
+def test_empty_answer_moves_to_the_next_model():
+    """A reasoning model that spends its whole budget thinking returns nothing.
+
+    That used to surface as an error - an AI question answered with a decline.
+    """
+    out, calls = _with({"a": "", "b": "real answer"},
+                       lambda: llm._complete("s", "u", ["a", "b"], 100, 0.0))
+    assert out == "real answer" and [m for m, _ in calls] == ["a", "b"]
+
+
+def test_every_model_empty_raises_a_clear_error():
+    try:
+        _with({"a": "", "b": ""}, lambda: llm._complete("s", "u", ["a", "b"], 100, 0.0))
+        raise AssertionError("expected an error")
+    except RuntimeError as exc:
+        assert "no content" in str(exc)
 
 
 def test_wait_hint_parses_minutes_and_hours():

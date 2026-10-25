@@ -1,0 +1,258 @@
+{
+  "full": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.0,
+      "mean_scored": 30.0,
+      "top10_overlap_with_full": 1.0,
+      "top5_overlap_with_full": 1.0
+    },
+    "vague": {
+      "recall_at_10": 0.568,
+      "early_exit": 0.0,
+      "mean_scored": 30.0,
+      "top10_overlap_with_full": 1.0,
+      "top5_overlap_with_full": 1.0
+    }
+  },
+  "n1=10,tau=0.5": {
+    "specific": {
+      "recall_at_10": 0.9816,
+      "early_exit": 0.89,
+      "mean_scored": 12.2,
+      "top10_overlap_with_full": 0.445,
+      "top5_overlap_with_full": 0.543
+    },
+    "vague": {
+      "recall_at_10": 0.556,
+      "early_exit": 0.368,
+      "mean_scored": 22.6,
+      "top10_overlap_with_full": 0.831,
+      "top5_overlap_with_full": 0.876
+    }
+  },
+  "n1=10,tau=0.6": {
+    "specific": {
+      "recall_at_10": 0.9816,
+      "early_exit": 0.859,
+      "mean_scored": 12.8,
+      "top10_overlap_with_full": 0.462,
+      "top5_overlap_with_full": 0.558
+    },
+    "vague": {
+      "recall_at_10": 0.564,
+      "early_exit": 0.276,
+      "mean_scored": 24.5,
+      "top10_overlap_with_full": 0.876,
+      "top5_overlap_with_full": 0.91
+    }
+  },
+  "n1=10,tau=0.7": {
+    "specific": {
+      "recall_at_10": 0.9816,
+      "early_exit": 0.767,
+      "mean_scored": 14.7,
+      "top10_overlap_with_full": 0.514,
+      "top5_overlap_with_full": 0.597
+    },
+    "vague": {
+      "recall_at_10": 0.572,
+      "early_exit": 0.204,
+      "mean_scored": 25.9,
+      "top10_overlap_with_full": 0.908,
+      "top5_overlap_with_full": 0.933
+    }
+  },
+  "n1=10,tau=0.8": {
+    "specific": {
+      "recall_at_10": 0.9816,
+      "early_exit": 0.687,
+      "mean_scored": 16.3,
+      "top10_overlap_with_full": 0.562,
+      "top5_overlap_with_full": 0.636
+    },
+    "vague": {
+      "recall_at_10": 0.568,
+      "early_exit": 0.136,
+      "mean_scored": 27.3,
+      "top10_overlap_with_full": 0.94,
+      "top5_overlap_with_full": 0.954
+    }
+  },
+  "n1=10,tau=0.9": {
+    "specific": {
+      "recall_at_10": 0.9816,
+      "early_exit": 0.546,
+      "mean_scored": 19.1,
+      "top10_overlap_with_full": 0.649,
+      "top5_overlap_with_full": 0.705
+    },
+    "vague": {
+      "recall_at_10": 0.568,
+      "early_exit": 0.056,
+      "mean_scored": 28.9,
+      "top10_overlap_with_full": 0.974,
+      "top5_overlap_with_full": 0.978
+    }
+  },
+  "n1=15,tau=0.5": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.908,
+      "mean_scored": 16.4,
+      "top10_overlap_with_full": 0.552,
+      "top5_overlap_with_full": 0.637
+    },
+    "vague": {
+      "recall_at_10": 0.572,
+      "early_exit": 0.42,
+      "mean_scored": 23.7,
+      "top10_overlap_with_full": 0.873,
+      "top5_overlap_with_full": 0.908
+    }
+  },
+  "n1=15,tau=0.6": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.883,
+      "mean_scored": 16.7,
+      "top10_overlap_with_full": 0.564,
+      "top5_overlap_with_full": 0.648
+    },
+    "vague": {
+      "recall_at_10": 0.576,
+      "early_exit": 0.328,
+      "mean_scored": 25.1,
+      "top10_overlap_with_full": 0.901,
+      "top5_overlap_with_full": 0.928
+    }
+  },
+  "n1=15,tau=0.7": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.816,
+      "mean_scored": 17.8,
+      "top10_overlap_with_full": 0.596,
+      "top5_overlap_with_full": 0.674
+    },
+    "vague": {
+      "recall_at_10": 0.576,
+      "early_exit": 0.236,
+      "mean_scored": 26.5,
+      "top10_overlap_with_full": 0.933,
+      "top5_overlap_with_full": 0.951
+    }
+  },
+  "n1=15,tau=0.8": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.748,
+      "mean_scored": 18.8,
+      "top10_overlap_with_full": 0.623,
+      "top5_overlap_with_full": 0.69
+    },
+    "vague": {
+      "recall_at_10": 0.576,
+      "early_exit": 0.164,
+      "mean_scored": 27.5,
+      "top10_overlap_with_full": 0.954,
+      "top5_overlap_with_full": 0.966
+    }
+  },
+  "n1=15,tau=0.9": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.589,
+      "mean_scored": 21.2,
+      "top10_overlap_with_full": 0.69,
+      "top5_overlap_with_full": 0.747
+    },
+    "vague": {
+      "recall_at_10": 0.572,
+      "early_exit": 0.076,
+      "mean_scored": 28.9,
+      "top10_overlap_with_full": 0.976,
+      "top5_overlap_with_full": 0.982
+    }
+  },
+  "n1=20,tau=0.5": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.914,
+      "mean_scored": 20.9,
+      "top10_overlap_with_full": 0.662,
+      "top5_overlap_with_full": 0.747
+    },
+    "vague": {
+      "recall_at_10": 0.564,
+      "early_exit": 0.444,
+      "mean_scored": 25.6,
+      "top10_overlap_with_full": 0.917,
+      "top5_overlap_with_full": 0.941
+    }
+  },
+  "n1=20,tau=0.6": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.908,
+      "mean_scored": 20.9,
+      "top10_overlap_with_full": 0.665,
+      "top5_overlap_with_full": 0.75
+    },
+    "vague": {
+      "recall_at_10": 0.568,
+      "early_exit": 0.336,
+      "mean_scored": 26.6,
+      "top10_overlap_with_full": 0.939,
+      "top5_overlap_with_full": 0.961
+    }
+  },
+  "n1=20,tau=0.7": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.84,
+      "mean_scored": 21.6,
+      "top10_overlap_with_full": 0.689,
+      "top5_overlap_with_full": 0.77
+    },
+    "vague": {
+      "recall_at_10": 0.572,
+      "early_exit": 0.26,
+      "mean_scored": 27.4,
+      "top10_overlap_with_full": 0.957,
+      "top5_overlap_with_full": 0.974
+    }
+  },
+  "n1=20,tau=0.8": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.779,
+      "mean_scored": 22.2,
+      "top10_overlap_with_full": 0.704,
+      "top5_overlap_with_full": 0.775
+    },
+    "vague": {
+      "recall_at_10": 0.572,
+      "early_exit": 0.18,
+      "mean_scored": 28.2,
+      "top10_overlap_with_full": 0.972,
+      "top5_overlap_with_full": 0.984
+    }
+  },
+  "n1=20,tau=0.9": {
+    "specific": {
+      "recall_at_10": 0.9877,
+      "early_exit": 0.607,
+      "mean_scored": 23.9,
+      "top10_overlap_with_full": 0.755,
+      "top5_overlap_with_full": 0.804
+    },
+    "vague": {
+      "recall_at_10": 0.572,
+      "early_exit": 0.088,
+      "mean_scored": 29.1,
+      "top10_overlap_with_full": 0.985,
+      "top5_overlap_with_full": 0.99
+    }
+  }
+}

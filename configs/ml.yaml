@@ -48,6 +48,14 @@ retrieval:
     query_prefix: "Represent this sentence for searching relevant passages: "
   fusion:
     rrf_k: 60
+  # Rerank the best `first` candidates and stop if their top-5 mean score is
+  # already >= tau; otherwise score the rest. Measured (scripts/eval_early_exit.py):
+  # recall@10 unchanged, ~23% fewer cross-encoder passes, and the top-5 list is
+  # identical to a full rerank for 84% of queries. Raise tau to be more
+  # conservative; remove the block to always score every candidate.
+  early_exit:
+    first: 15
+    tau: 0.7
 
 # v1 uses the OFF-THE-SHELF reranker, not a fine-tuned one. The parent project's
 # ablation was a null result and most of its gain came from domain adaptation,
@@ -139,6 +147,17 @@ paths:
   index_cache: cache/ml_v3
   feedback_db: results/ml_feedback.db
   upload_dir: cache/uploads
+
+# Where the corpus above comes from when it is not on disk (a fresh container).
+# It is too big for a free Space's own repo (1 GB), so it lives in a public
+# dataset repo and is downloaded once per start. If that fails, the app falls
+# back to the small corpus bundled with the Space rather than refusing to boot.
+corpus:
+  repo: Kagzy/researchos-corpus
+  fallback:
+    papers: data/arxiv_papers.jsonl
+    chunks: data/arxiv_chunks.jsonl
+    index_cache: cache/ml
 
 # v2: structured failure diagnosis (CRITIC-R1 format) when the confidence gate
 # fires and nothing rescues the query. Fires only on low-confidence results.
