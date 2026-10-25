@@ -833,22 +833,6 @@ function AskView({
   return (
     <div className="mt-8 space-y-6">
       {result.diagnosis && <DiagnosisPanel diagnosis={result.diagnosis} onRetry={onRetry} />}
-      {result.source === "general_knowledge" ? (
-        <Callout tone="amber" title="Answered from general knowledge, not from papers">
-          No paper in the index or in a live arXiv and OpenAlex search covered this
-          question, so the answer below is the model&apos;s own knowledge. It has no citations,
-          so check anything that matters against a primary source. Related papers are
-          listed underneath as further reading.
-        </Callout>
-      ) : (
-        <Callout tone="amber" title="Not a citation — answered as a question instead">
-          Nothing resolved to a specific paper, so this was answered from{" "}
-          {result.source === "arxiv_live" || result.source === "corpus+arxiv_live"
-            ? "the corpus and a live arXiv and OpenAlex search"
-            : "the corpus"}
-          .
-        </Callout>
-      )}
       {result.answer && (
         <article className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
           <Prose text={result.answer} />
@@ -857,15 +841,19 @@ function AskView({
           </div>
         </article>
       )}
+      {/* No banner: an answer that is not drawn from papers is marked by a quiet
+          tag here and by the "Related papers" heading below, which is enough to
+          tell it apart from a cited answer without a warning box. */}
       <Meta
         items={[
+          ...(result.grounded === false ? ["general knowledge · no citations"] : []),
           `${result.distinct_papers} papers`,
           `${result.timing_ms.total.toFixed(0)} ms`,
           `mean ${result.mean_top_score.toFixed(3)}`,
         ]}
       />
       <PassageList
-        title={result.grounded === false ? "Related papers (not sources)" : "Sources"}
+        title={result.grounded === false ? "Related papers" : "Sources"}
         passages={result.citations}
         queryId={queryId}
       />

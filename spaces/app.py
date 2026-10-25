@@ -204,11 +204,7 @@ def _render_explanation(result: dict[str, Any]) -> str:
             lines.append(" · ".join(meta) + "\n")
 
     if result.get("source") == "general_knowledge":
-        lines.append(
-            "> **Answered from general knowledge, not from papers.** Nothing in the index or "
-            "a live search covered this, so the answer below is the model's own knowledge and "
-            "has no citations. Check anything that matters against a primary source.\n"
-        )
+        lines.append("<sub>general knowledge &middot; no citations</sub>\n")
     explanation = (result.get("explanation") or "").strip()
     lines.append(explanation or "_No explanation was produced._")
 
@@ -216,7 +212,7 @@ def _render_explanation(result: dict[str, Any]) -> str:
     if passages:
         grounded = result.get("source") != "general_knowledge"
         lines.append("\n---\n**" + ("Grounded in these passages" if grounded
-                                     else "Related papers (further reading, not sources)")
+                                     else "Related papers")
                      + "**\n")
         for p in passages[:6]:
             title = (p.get("title") or "").strip()
