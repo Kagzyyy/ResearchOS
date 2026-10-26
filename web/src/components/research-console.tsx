@@ -727,19 +727,6 @@ function PapersView({
   return (
     <div className="mt-8 space-y-6">
       {result.diagnosis && <DiagnosisPanel diagnosis={result.diagnosis} onRetry={onRetry} />}
-      {result.source === "arxiv_live" && (
-        <Callout tone="amber" title="Not in the local corpus — fetched live">
-          The indexed sample does not cover this topic, so these came straight from arXiv
-          and OpenAlex, rescored by the same reranker. Abstracts only, so no full-text
-          passages.
-        </Callout>
-      )}
-      {!result.confident && result.source !== "arxiv_live" && (
-        <Callout tone="amber" title="Outside this corpus">
-          Top matches averaged {result.mean_top_score.toFixed(3)}. Results are shown but
-          are probably unrelated to what you asked.
-        </Callout>
-      )}
       <Meta
         items={[
           `${result.papers.length} papers`,
