@@ -41,6 +41,7 @@ import BoxLoader from "@/components/ui/box-loader";
 import MorphOrb, { type MorphOrbHandle } from "@/components/ui/ai-thiking-orb-and-input";
 import MathText, { extractMath, withMath } from "@/components/ui/math-text";
 import PaperFigures from "@/components/ui/paper-figures";
+import HalftoneNebula from "@/components/ui/halftone-nebula";
 import { LeaderboardRankings } from "@/components/ui/leaderboard-rankings";
 import {
   addHistory,
@@ -67,6 +68,9 @@ const EXAMPLES: Record<Mode, string[]> = {
   ],
 };
 
+// The planet moves right, out from under the headline.
+const SKY = { planetX: 0.78, planetY: 0.24 };
+
 export function ResearchConsole() {
   const [mode, setMode] = useState<Mode>("papers");
   const [loading, setLoading] = useState(false);
@@ -74,8 +78,12 @@ export function ResearchConsole() {
   // skeleton loader would only be a second spinner under it.
   const [animated, setAnimated] = useState(false);
   const orbRef = useRef<MorphOrbHandle>(null);
-  const sectionRef = useRef<HTMLElement>(null);
-  const [inView, setInView] = useState(false);
+  // The results panel. `revealed` follows the orb's animation (the panel opens as
+  // the orb collapses, not before), `dismissed` is the user closing it.
+  const [revealed, setRevealed] = useState(true);
+  const [dismissed, setDismissed] = useState(false);
+  const [lastQuery, setLastQuery] = useState("");
+  const [lastMode, setLastMode] = useState<Mode>("papers");
   const [error, setError] = useState<string | null>(null);
   const [papersResult, setPapersResult] = useState<PapersResult | null>(null);
   const [explainResult, setExplainResult] = useState<ExplainResult | null>(null);
@@ -88,18 +96,6 @@ export function ResearchConsole() {
 
   useEffect(() => {
     setHistory(readHistory());
-  }, []);
-
-  // The orb bar belongs to this section: show it while the console is on
-  // screen and let it step aside over the hero.
-  useEffect(() => {
-    const el = sectionRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(([entry]) => setInView(entry.isIntersecting), {
-      threshold: 0.05,
-    });
-    io.observe(el);
-    return () => io.disconnect();
   }, []);
 
   // The extension hands off here when it cannot draw a panel on the page -
@@ -134,17 +130,21 @@ export function ResearchConsole() {
     value: string,
     retryOf: number | null = null,
     viaOrb = false,
+    asMode: Mode = mode,
   ): Promise<string> {
     const text = value.trim();
     if (text.length < 3) return "Type at least three characters.";
     if (loading) return "Still working on the previous search.";
     setAnimated(viaOrb);
+    setDismissed(false);
+    setLastQuery(text);
+    setLastMode(asMode);
     setLoading(true);
     clear();
     try {
       let summary = "";
       let spoken = "";
-      if (mode === "papers") {
+      if (asMode === "papers") {
         const res = await findPapers(text, 10, retryOf);
         setPapersResult(res);
         summary = `${res.papers.length} papers`;
@@ -176,7 +176,7 @@ export function ResearchConsole() {
                 : "No answer found.";
         }
       }
-      setHistory(addHistory({ query: text, mode, summary }));
+      setHistory(addHistory({ query: text, mode: asMode, summary }));
       return spoken;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -207,54 +207,277 @@ export function ResearchConsole() {
   const queryId =
     papersResult?.query_id ?? explainResult?.query_id ?? askResult?.query_id ?? null;
 
-  return (
-    <section
-      id="console"
-      ref={sectionRef}
-      className="mx-auto w-full max-w-5xl px-4 pt-16 pb-48 md:pt-24 md:pb-56"
-    >
-      <header className="mb-8">
-        <h2 className="font-serif text-3xl text-white md:text-4xl">Research console</h2>
-        <p className="mt-2 text-sm text-slate-400">
-          {status
-            ? `${status.papers.toLocaleString()} papers · ${status.chunks.toLocaleString()} passages · reranked by ${status.reranker_model?.split("/").pop()}`
-            : IS_MISCONFIGURED
-              ? "Not connected — this deployment has no backend address configured."
-              : "Connecting to the search backend…"}
-          {status && !status.generation_enabled && (
-            <span className="ml-2 text-amber-400">· GROQ_API_KEY unset, no written answers</span>
-          )}
-        </p>
-      </header>
+  const hasContent = Boolean(papersResult || explainResult || askResult || error);
+  const spinner = loading && !animated;
+  const open = !dismissed && (spinner || (!loading && hasContent && (!animated || revealed)));
+  const chips = (
+    mode === "explain" && doc
+      ? ["What problem does this solve?", "Explain the method in simple terms", "What are the limitations?"]
+      : EXAMPLES[mode]
+  ).slice(0, 5);
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        <ModeButton
-          active={mode === "papers"}
-          onClick={() => {
-            setMode("papers");
-            clear();
-          }}
-          icon={<Layers size={15} />}
-          hint="a topic → the papers on it"
+  // Esc closes the results (while the orb is animating, Esc cancels the animation instead).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDismissed(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // The panel opens as the orb collapses; a new search closes it first.
+  const onOrbPhase = (phase: string) => {
+    if (phase === "launch") setRevealed(false);
+    else if (["condense", "unfold", "answered", "reset", "idle"].includes(phase)) setRevealed(true);
+  };
+
+  return (
+    <main className="h-svh w-full overflow-hidden bg-[#050309]">
+      <HalftoneNebula params={SKY} maxDpr={1.5} touch="draw">
+        {/* ── top bar ── */}
+        <header className="flex items-start justify-between gap-4 p-5 font-mono text-[10px] tracking-[0.3em] text-[#f6e2e8]/60 uppercase sm:p-8">
+          <span className="text-[#f6e2e8]/90">ResearchOS</span>
+          <span className="text-right tracking-[0.12em] normal-case">
+            {status
+              ? `${status.papers.toLocaleString()} papers · ${status.chunks.toLocaleString()} passages`
+              : IS_MISCONFIGURED
+                ? "not connected"
+                : "connecting…"}
+            {status && !status.generation_enabled && (
+              <span className="ml-2 text-amber-400">· no written answers</span>
+            )}
+          </span>
+        </header>
+
+        {/* ── the headline, while nothing is being asked ── */}
+        <div
+          className={`pointer-events-none absolute inset-x-0 top-[20%] px-6 transition-all duration-500 sm:px-12 ${
+            open || loading ? "translate-y-3 opacity-0" : "opacity-100"
+          }`}
         >
-          Find papers
-        </ModeButton>
-        <ModeButton
-          active={mode === "explain"}
-          onClick={() => {
-            setMode("explain");
-            clear();
-          }}
-          icon={<Sparkles size={15} />}
-          hint="a citation or a concept → explained"
+          <p className="mb-4 font-mono text-[11px] tracking-[0.34em] text-[#ff1f5a] uppercase">
+            ✦ {status ? status.papers.toLocaleString() : "…"} papers indexed
+          </p>
+          <h1 className="max-w-2xl text-5xl leading-[0.95] font-semibold tracking-tight text-[#f6e2e8] sm:text-7xl">
+            Ask the
+            <br />
+            literature.
+          </h1>
+          <p className="mt-5 max-w-md text-sm leading-relaxed text-[#f6e2e8]/65">
+            Find the papers on a topic, or ask what anything means. Every answer is grounded in
+            the papers it cites, with their equations and figures.
+          </p>
+
+          {!status && (
+            <div className="pointer-events-auto mt-6 max-w-md">
+              <Callout
+                tone="amber"
+                title={IS_MISCONFIGURED ? "This deployment isn't finished" : "Waiting for the backend"}
+              >
+                {IS_MISCONFIGURED ? (
+                  <>
+                    The site is live but no search backend is reachable from here. Whoever
+                    deployed it needs to set <code>NEXT_PUBLIC_API_BASE</code> to a public HTTPS
+                    address and redeploy.
+                  </>
+                ) : (
+                  <>
+                    The backend loads its index and two models on start, which takes a few
+                    minutes. This will clear on its own, no need to refresh.
+                  </>
+                )}
+              </Callout>
+            </div>
+          )}
+
+          {history.length > 0 && status && (
+            // Recent searches are the first thing to give up space: not on phones,
+            // and not on short windows where they would run into the example chips.
+            <div className="pointer-events-auto mt-6 hidden max-w-xl sm:block [@media(max-height:760px)]:hidden">
+              <div className="mb-2 flex items-center gap-3 font-mono text-[10px] tracking-[0.28em] text-[#f6e2e8]/45 uppercase">
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock size={11} /> Recent
+                </span>
+                <button
+                  onClick={() => setHistory(clearHistory())}
+                  className="tracking-[0.2em] transition hover:text-[#f6e2e8]"
+                >
+                  clear
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {history.slice(0, 4).map((h) => (
+                  <button
+                    key={h.id}
+                    onClick={() => {
+                      setMode(h.mode);
+                      void run(h.query, null, false, h.mode);
+                    }}
+                    title={`${h.summary ?? ""} · ${relativeTime(h.at)}`}
+                    className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/10 bg-black/30 px-2.5 py-1 text-xs text-[#f6e2e8]/70 transition hover:border-[#ff1f5a]/60 hover:text-[#f6e2e8]"
+                  >
+                    <span className="shrink-0 text-[10px] text-[#ff1f5a]/80 uppercase">
+                      {h.mode === "papers" ? "find" : "explain"}
+                    </span>
+                    <span className="truncate">{h.query.slice(0, 40)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── above the bar: examples, the mode switch, the PDF ── */}
+        <div className="absolute inset-x-0 bottom-[140px] z-10 flex flex-col items-center gap-3 px-4">
+          <div
+            className={`flex max-w-3xl flex-wrap justify-center gap-2 transition-opacity duration-300 ${
+              open || loading ? "pointer-events-none opacity-0" : "opacity-100"
+            }`}
+          >
+            {chips.map((ex, i) => (
+              <button
+                key={ex}
+                onClick={() => orbRef.current?.submit(ex)}
+                className={`max-w-[18rem] truncate rounded-full border border-white/12 bg-black/35 px-3 py-1.5 text-xs text-[#f6e2e8]/70 transition hover:border-[#ff1f5a]/60 hover:text-[#f6e2e8] ${
+                  i >= 3 ? "hidden sm:inline-block" : ""
+                }`}
+              >
+                {ex.length > 52 ? `${ex.slice(0, 52)}…` : ex}
+              </button>
+            ))}
+          </div>
+
+          <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+            <ModeButton
+              active={mode === "papers"}
+              onClick={() => {
+                setMode("papers");
+                clear();
+              }}
+              icon={<Layers size={15} />}
+              hint="a topic → the papers on it"
+            >
+              Find papers
+            </ModeButton>
+            <ModeButton
+              active={mode === "explain"}
+              onClick={() => {
+                setMode("explain");
+                clear();
+              }}
+              icon={<Sparkles size={15} />}
+              hint="a citation or a concept → explained"
+            >
+              Explain
+            </ModeButton>
+            {mode === "explain" && (
+              <>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="hidden"
+                  onChange={(e) => handleFile(e.target.files?.[0])}
+                />
+                {doc ? (
+                  <span className="inline-flex max-w-[16rem] items-center gap-2 rounded-lg border border-sky-400/30 bg-black/50 px-3 py-2 text-xs text-sky-100">
+                    <Paperclip size={13} className="shrink-0 text-sky-300" />
+                    <span className="truncate">{doc.title}</span>
+                    <button
+                      onClick={() => setDoc(null)}
+                      className="shrink-0 rounded p-0.5 text-sky-300 transition hover:bg-white/10 hover:text-white"
+                      aria-label="Stop using this document"
+                    >
+                      <X size={13} />
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    disabled={uploading}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-black/35 px-3 py-2 text-xs text-[#f6e2e8]/70 transition hover:text-white disabled:opacity-50"
+                  >
+                    {uploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
+                    {uploading ? "Reading PDF…" : "Attach a PDF"}
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* ── results: a panel over the sky, never a new page or a scroll down ── */}
+        <div
+          data-nebula-ignore
+          inert={!open}
+          aria-hidden={!open}
+          className={`absolute inset-x-3 top-16 bottom-[208px] z-20 mx-auto max-w-4xl transition-all duration-500 ease-out sm:inset-x-6 ${
+            open ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none translate-y-6 opacity-0"
+          }`}
         >
-          Explain
-        </ModeButton>
-      </div>
+          <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-white/12 bg-[#06040b]/92 shadow-2xl shadow-black/70">
+            <div className="flex items-center gap-3 border-b border-white/10 px-5 py-3">
+              <span className="shrink-0 font-mono text-[10px] tracking-[0.28em] text-[#ff1f5a] uppercase">
+                {lastMode === "papers" ? "papers" : "explain"}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-300">{lastQuery}</span>
+              <span className="hidden shrink-0 font-mono text-[10px] tracking-[0.2em] text-slate-600 uppercase sm:inline">
+                esc to close
+              </span>
+              <button
+                onClick={() => setDismissed(true)}
+                aria-label="Close results"
+                className="shrink-0 rounded-md p-1 text-slate-400 transition hover:bg-white/10 hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8 [&>div:first-child]:mt-4"
+              tabIndex={open ? 0 : -1}
+            >
+              {spinner && (
+                <div className="mt-10 flex flex-col items-center gap-6 py-10">
+                  <BoxLoader />
+                  <p className="text-sm text-slate-400">
+                    {lastMode === "papers"
+                      ? "Searching the papers…"
+                      : doc
+                        ? `Reading ${doc.title.slice(0, 40)}…`
+                        : "Retrieving, reranking, then writing an answer…"}
+                  </p>
+                </div>
+              )}
+              {error && (
+                <Callout tone="red" title="Request failed">
+                  {error}
+                </Callout>
+              )}
+              {!loading && papersResult && (
+                <PapersView
+                  result={papersResult}
+                  queryId={queryId}
+                  onRetry={(q) => void run(q, queryId, false, lastMode)}
+                />
+              )}
+              {!loading && explainResult && <ExplainView result={explainResult} queryId={queryId} />}
+              {!loading && askResult && (
+                <AskView
+                  result={askResult}
+                  queryId={queryId}
+                  onRetry={(q) => void run(q, queryId, false, lastMode)}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      </HalftoneNebula>
 
       <MorphOrb
         ref={orbRef}
         onSubmit={(text) => run(text, null, true)}
+        onPhase={onOrbPhase}
         placeholder={
           mode === "papers"
             ? "A topic, e.g. world models for robot manipulation…"
@@ -266,150 +489,11 @@ export function ResearchConsole() {
         answerTitle="Results"
         // The animation's own "thinking" floor is cosmetic (the default is 3.4 s);
         // the real search sets the pace, with just enough for the labels to turn.
-        minThinkMs={900}
-        speed={1.5}
-        autoResetMs={2600}
-        hidden={!inView}
+        minThinkMs={700}
+        speed={1.6}
+        autoResetMs={1300}
       />
-
-      <p className="mb-3 text-xs text-slate-500">
-        Ask in the bar at the bottom of the screen.{" "}
-        {mode === "papers"
-          ? "Describe a topic and get the papers on it."
-          : "Paste a reference, an arXiv id or a DOI, or ask about a concept."}
-      </p>
-
-      {mode === "explain" && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
-          {doc && (
-            <div className="mb-2 flex items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs">
-              <Paperclip size={13} className="shrink-0 text-sky-300" />
-              <span className="min-w-0 flex-1 truncate text-sky-100">
-                Asking about <span className="font-medium">{doc.title}</span>
-              </span>
-              <span className="shrink-0 text-sky-400/70">
-                {doc.n_chunks} passages · {doc.n_words.toLocaleString()} words
-              </span>
-              <button
-                onClick={() => setDoc(null)}
-                className="shrink-0 rounded p-0.5 text-sky-300 transition hover:bg-white/10 hover:text-white"
-                aria-label="Stop using this document"
-              >
-                <X size={13} />
-              </button>
-            </div>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/pdf,.pdf"
-            className="hidden"
-            onChange={(e) => handleFile(e.target.files?.[0])}
-          />
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className="inline-flex items-center gap-1.5 text-xs text-slate-400 transition hover:text-slate-200 disabled:opacity-50"
-          >
-            {uploading ? <Loader2 size={13} className="animate-spin" /> : <Paperclip size={13} />}
-            {uploading ? "Reading PDF…" : doc ? "Replace PDF" : "Attach a PDF to ask about it"}
-          </button>
-        </div>
-      )}
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        {(mode === "explain" && doc
-          ? ["What problem does this solve?", "Explain the method in simple terms", "What are the limitations?"]
-          : EXAMPLES[mode]
-        ).map((ex) => (
-          <button
-            key={ex}
-            onClick={() => orbRef.current?.submit(ex)}
-            className="max-w-full truncate rounded-full border border-white/10 px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/25 hover:text-slate-200"
-          >
-            {ex.length > 64 ? `${ex.slice(0, 64)}…` : ex}
-          </button>
-        ))}
-      </div>
-
-      {history.length > 0 && !loading && (
-        <div className="mt-6 border-t border-white/5 pt-4">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="inline-flex items-center gap-1.5 text-xs tracking-wider text-slate-500 uppercase">
-              <Clock size={12} /> Recent
-            </span>
-            <button
-              onClick={() => setHistory(clearHistory())}
-              className="text-xs text-slate-600 transition hover:text-slate-400"
-            >
-              Clear
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {history.slice(0, 8).map((h) => (
-              <button
-                key={h.id}
-                onClick={() => {
-                  setMode(h.mode);
-                  void run(h.query);
-                }}
-                title={`${h.summary ?? ""} · ${relativeTime(h.at)}`}
-                className="group inline-flex max-w-full items-center gap-1.5 rounded-md border border-white/5 bg-white/[0.02] px-2.5 py-1 text-xs text-slate-400 transition hover:border-white/20 hover:text-slate-200"
-              >
-                <span className="shrink-0 text-[10px] text-slate-600 uppercase">
-                  {h.mode === "papers" ? "find" : "explain"}
-                </span>
-                <span className="truncate">{h.query.slice(0, 46)}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {loading && !animated && (
-        <div className="mt-10 flex flex-col items-center gap-6 py-10">
-          <BoxLoader />
-          <p className="text-sm text-slate-400">
-            {mode === "papers"
-              ? "Searching 40,379 passages…"
-              : doc
-                ? `Reading ${doc.title.slice(0, 40)}…`
-                : "Retrieving, reranking, then writing an answer…"}
-          </p>
-        </div>
-      )}
-
-      {!status && (
-        <Callout tone="amber" title={IS_MISCONFIGURED ? "This deployment isn't finished" : "Waiting for the backend"}>
-          {IS_MISCONFIGURED ? (
-            <>
-              The site is live but no search backend is reachable from here. Whoever
-              deployed it needs to set <code>NEXT_PUBLIC_API_BASE</code> to a public
-              HTTPS address and redeploy.
-            </>
-          ) : (
-            <>
-              The backend loads 40,000 passages and two models on start, which takes
-              two to three minutes. This will clear on its own — no need to refresh.
-            </>
-          )}
-        </Callout>
-      )}
-
-      {error && (
-        <Callout tone="red" title="Request failed">
-          {error}
-        </Callout>
-      )}
-
-      {!loading && papersResult && (
-        <PapersView result={papersResult} queryId={queryId} onRetry={(q) => run(q, queryId)} />
-      )}
-      {!loading && explainResult && <ExplainView result={explainResult} queryId={queryId} />}
-      {!loading && askResult && (
-        <AskView result={askResult} queryId={queryId} onRetry={(q) => run(q, queryId)} />
-      )}
-    </section>
+    </main>
   );
 }
 
@@ -430,7 +514,9 @@ function ModeButton({
     <button
       onClick={onClick}
       className={`group inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition ${
-        active ? "bg-white/10 text-white ring-1 ring-white/20" : "text-slate-400 hover:text-slate-200"
+        active
+          ? "bg-black/55 text-white ring-1 ring-[#ff1f5a]/60"
+          : "bg-black/30 text-[#f6e2e8]/65 hover:text-white"
       }`}
     >
       {icon}

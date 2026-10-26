@@ -39,6 +39,8 @@ export interface MorphOrbProps {
   autoResetMs?: number;
   /** Fade the idle bar out (e.g. while scrolled away from the section it belongs to). Never hides a running animation. */
   hidden?: boolean;
+  /** Called on every phase change: idle, launch, assemble, think, resolve, condense, unfold, answered, reset. */
+  onPhase?: (phase: string) => void;
 }
 
 export interface MorphOrbHandle {
@@ -636,6 +638,13 @@ function createRuntime(env: Env): Runtime {
       if (sig.aborted) throw ABORT;
     };
     try {
+      // Start the real work NOW, alongside the intro animation. The original
+      // started it only once the animation reached its "thinking" phase, which
+      // put ~1.5 s of animation in front of every search for no reason.
+      const pending = Promise.resolve()
+        .then(() => cfg.onSubmit(text))
+        .then((b) => (typeof b === "string" && b.trim() ? b : COPY.answerBody), () => COPY.answerBody);
+
       env.ui.setPhase("launch");
       hist.length = 0;
       if (!reduced) {
@@ -657,9 +666,6 @@ function createRuntime(env: Env): Runtime {
       const ctl = { stop: false };
       void labelLoop(sig, ctl);
       const t0 = performance.now();
-      const pending = Promise.resolve()
-        .then(() => cfg.onSubmit(text))
-        .then((b) => (typeof b === "string" && b.trim() ? b : COPY.answerBody), () => COPY.answerBody);
       const got = await abortable(pending, sig);
       if (sig.aborted) throw ABORT;
       const body = got ?? COPY.answerBody;
@@ -871,7 +877,7 @@ const MorphOrb = forwardRef<MorphOrbHandle, MorphOrbProps>(function MorphOrb(pro
       getSpeed: () => speedRef.current,
       isReduced: () => reducedRef.current,
       ui: {
-        setPhase: (p) => { phaseRef.current = p; setPhaseState(p); },
+        setPhase: (p) => { phaseRef.current = p; setPhaseState(p); propsRef.current.onPhase?.(p); },
         swapLabel: (name) => setLbl((l) => (l.cur === name ? l : { cur: name, prev: l.cur, n: l.n + 1 })),
         resetLabel: () => setLbl((l) => ({ cur: COPY.labels[0], prev: null, n: l.n + 1 })),
         setAnswer: (s) => setAnswer(s),
