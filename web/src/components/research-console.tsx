@@ -39,6 +39,8 @@ import {
 } from "@/lib/api";
 import BoxLoader from "@/components/ui/box-loader";
 import MorphOrb, { type MorphOrbHandle } from "@/components/ui/ai-thiking-orb-and-input";
+import MathText, { extractMath, withMath } from "@/components/ui/math-text";
+import PaperFigures from "@/components/ui/paper-figures";
 import { LeaderboardRankings } from "@/components/ui/leaderboard-rankings";
 import {
   addHistory,
@@ -776,12 +778,14 @@ function PaperCard({
             <p className="mb-1 text-[11px] tracking-wider text-slate-500 uppercase">
               Why it matched · {paper.why_section}
             </p>
-            <p className="text-sm leading-relaxed text-slate-300">{paper.why}…</p>
+            <p className="text-sm leading-relaxed text-slate-300"><MathText text={paper.why} />…</p>
           </div>
           {paper.abstract && (
             <div>
               <p className="mb-1 text-[11px] tracking-wider text-slate-500 uppercase">Abstract</p>
-              <p className="text-sm leading-relaxed text-slate-400">{paper.abstract}</p>
+              <p className="text-sm leading-relaxed text-slate-400">
+                <MathText text={paper.abstract} />
+              </p>
             </div>
           )}
           <a
@@ -843,6 +847,13 @@ function ExplainView({ result, queryId }: { result: ExplainResult; queryId: numb
         </article>
       )}
 
+      <PaperFigures
+        paperIds={[paper.paper_id]}
+        question={result.citation}
+        titles={{ [paper.paper_id]: paper.title }}
+        perPaper={3}
+      />
+
       <PassageList title="From this paper" passages={result.passages} queryId={queryId} />
       {result.related.length > 0 && (
         <PassageList
@@ -887,6 +898,13 @@ function AskView({
           `mean ${result.mean_top_score.toFixed(3)}`,
         ]}
       />
+      {result.grounded !== false && (
+        <PaperFigures
+          paperIds={result.citations.map((c) => c.paper_id)}
+          question={result.question}
+          titles={Object.fromEntries(result.citations.map((c) => [c.paper_id, c.title]))}
+        />
+      )}
       <PassageList
         title={result.grounded === false ? "Related papers" : "Sources"}
         passages={result.citations}
@@ -900,9 +918,12 @@ function AskView({
 /* -------------------------------------------------------------- primitives */
 
 function Prose({ text }: { text: string }) {
+  // Equations come out before the text is split into lines: a display equation
+  // spans several, and "*" or "_" inside one is not emphasis.
+  const { text: body, items } = extractMath(text);
   return (
     <div className="space-y-3 text-[15px] leading-relaxed text-slate-200">
-      {text
+      {body
         .split("\n")
         .filter((l) => l.trim())
         .map((line, i) => (
@@ -910,16 +931,17 @@ function Prose({ text }: { text: string }) {
             {line
               .split(/(\*\*[^*]+\*\*|`[^`]+`|\[\d{4}\.\d{4,5}[^\]]*\])/g)
               .map((part, j) => {
+                const key = `m${i}-${j}-`;
                 if (part.startsWith("**") && part.endsWith("**"))
                   return (
                     <strong key={j} className="font-semibold text-white">
-                      {part.slice(2, -2)}
+                      {withMath(part.slice(2, -2), items, key)}
                     </strong>
                   );
                 if (part.startsWith("`") && part.endsWith("`"))
                   return (
                     <code key={j} className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[13px]">
-                      {part.slice(1, -1)}
+                      {withMath(part.slice(1, -1), items, key)}
                     </code>
                   );
                 if (/^\[\d{4}\.\d{4,5}[^\]]*\]$/.test(part))
@@ -934,7 +956,7 @@ function Prose({ text }: { text: string }) {
                       {part}
                     </a>
                   );
-                return <span key={j}>{part}</span>;
+                return <span key={j}>{withMath(part, items, key)}</span>;
               })}
           </p>
         ))}
@@ -996,7 +1018,9 @@ function PassageCard({ passage, queryId }: { passage: Passage; queryId: number |
       </button>
       {open && (
         <div className="border-t border-white/10 px-4 py-3">
-          <p className="text-sm leading-relaxed text-slate-300">{passage.text}</p>
+          <p className="text-sm leading-relaxed text-slate-300">
+            <MathText text={passage.text} />
+          </p>
           <a
             href={passage.arxiv_url}
             target="_blank"

@@ -228,6 +228,21 @@ def main() -> None:
         except Exception as exc:  # noqa: BLE001
             checks.record("citation by DOI (no arXiv copy)", FAIL, f"{type(exc).__name__}: {exc}")
 
+    # --- figures: a paper's own figures, from arXiv, over the batched endpoint -------
+    if not sources.get("figures", {}).get("available"):
+        checks.record("paper figures", SKIP, "figure lookups paused or this backend predates them")
+    else:
+        try:
+            got = checks.get("/figures?ids=1706.03762&q=attention&per_paper=2")["figures"]
+            figs = got.get("1706.03762", [])
+            urls = [u for f in figs for u in f["images"]]
+            ok = bool(figs) and all(u.startswith("https://arxiv.org/") for u in urls)
+            checks.record("paper figures", PASS if ok else FAIL,
+                          f"{len(figs)} figures, {len(urls)} images"
+                          + (f", first: {figs[0]['label']}" if figs else ""))
+        except Exception as exc:  # noqa: BLE001
+            checks.record("paper figures", FAIL, f"{type(exc).__name__}: {exc}")
+
     # --- a question must not be resolved as a paper title -----------------
     try:
         result = checks.post(

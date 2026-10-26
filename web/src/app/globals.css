@@ -555,3 +555,10 @@ body {
   .mo-aurora i, .mo-ring, .mo-lab-t, .mo-dots i { animation: none; }
   .mo-in, .mo-out { animation-duration: 0.01s; }
 }
+
+
+/* Typeset maths (components/ui/math-text.tsx). A long display equation scrolls
+   within its own line instead of pushing the page sideways. */
+.math-display { display: block; margin: 0.4rem 0; overflow-x: auto; overflow-y: hidden; }
+.math-display .katex-display { margin: 0; }
+.katex { font-size: 1.05em; }

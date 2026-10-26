@@ -37,6 +37,7 @@ CPU costs no quota, never queues, and cannot run out.
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 from pathlib import Path
@@ -123,6 +124,18 @@ def _authors(names: list[str]) -> str:
         return ""
     shown = ", ".join(names[:3])
     return f"{shown} et al." if len(names) > 3 else shown
+
+
+# Every spelling of maths a model or an arXiv abstract uses; Gradio only typesets
+# the ones listed here.
+LATEX_DELIMITERS = [
+    {"left": "$$", "right": "$$", "display": True},
+    {"left": "\\[", "right": "\\]", "display": True},
+    {"left": "\\(", "right": "\\)", "display": False},
+    {"left": "$", "right": "$", "display": False},
+]
+# gr.Markdown with the delimiters pre-set, so every call site stays as it was.
+_Markdown = functools.partial(gr.Markdown, latex_delimiters=LATEX_DELIMITERS)
 
 
 def _render_diagnosis(d: dict[str, Any] | None) -> str:
@@ -322,14 +335,14 @@ def corpus_line() -> str:
 # Interface
 # --------------------------------------------------------------------------
 with gr.Blocks(title="ResearchOS", analytics_enabled=False) as demo:
-    gr.Markdown(
+    _Markdown(
         "# ResearchOS\n"
         "Search AI research by what a paper *does*, and de-reference the citations inside it."
     )
-    status = gr.Markdown("Loading the index…")
+    status = _Markdown("Loading the index…")
 
     with gr.Tab("Find papers"):
-        gr.Markdown("Describe the work you are looking for — a method, a task, a problem.")
+        _Markdown("Describe the work you are looking for — a method, a task, a problem.")
         with gr.Row():
             topic = gr.Textbox(
                 label="Topic", scale=4, max_lines=2,
@@ -337,7 +350,7 @@ with gr.Blocks(title="ResearchOS", analytics_enabled=False) as demo:
             )
             count = gr.Slider(3, 20, value=8, step=1, label="Results", scale=1)
         find_button = gr.Button("Search", variant="primary")
-        papers_out = gr.Markdown()
+        papers_out = _Markdown()
         gr.Examples(
             [["world models for robot manipulation", 8],
              ["mixture of experts routing", 8],
@@ -348,7 +361,7 @@ with gr.Blocks(title="ResearchOS", analytics_enabled=False) as demo:
         topic.submit(find_papers, [topic, count], papers_out)
 
     with gr.Tab("Explain"):
-        gr.Markdown(
+        _Markdown(
             "Paste a reference you hit while reading — `arXiv:2312.00752`, or "
             "`[23] M. Assran et al. Self-Supervised Learning…` — and get the paper it "
             "points to, explained. Plain questions work too. Attach a PDF to ask about "
@@ -357,20 +370,20 @@ with gr.Blocks(title="ResearchOS", analytics_enabled=False) as demo:
         document_id = gr.State(None)
         pdf = gr.File(label="Optional: a paper to ask about", file_types=[".pdf"],
                       type="filepath")
-        pdf_status = gr.Markdown()
+        pdf_status = _Markdown()
         citation = gr.Textbox(
             label="Citation, arXiv id, or question", max_lines=4,
             placeholder="How do JEPAs avoid representation collapse?",
         )
         explain_button = gr.Button("Explain", variant="primary")
-        explain_out = gr.Markdown()
+        explain_out = _Markdown()
 
         pdf.change(attach_pdf, pdf, [document_id, pdf_status])
         pdf.clear(lambda: (None, ""), None, [document_id, pdf_status])
         explain_button.click(explain, [citation, document_id], explain_out)
         citation.submit(explain, [citation, document_id], explain_out)
 
-    gr.Markdown(
+    _Markdown(
         "<sub>Answers are grounded in retrieved passages and cite them. A weak match is "
         "reported as a weak match rather than dressed up. "
         f"[API docs](/docs) · [source]({SOURCE_URL}) · AGPL-3.0</sub>"

@@ -227,6 +227,30 @@ export const vote = (queryId: number, helpful: boolean, comment?: string) =>
     comment: comment ?? null,
   });
 
+export interface PaperFigure {
+  label: string;
+  number: number;
+  caption: string;
+  images: string[];
+  score: number;
+}
+
+/** Ranked figures for up to four arXiv papers, in one request. Never rejects the page: callers treat a failure as "none". */
+export async function getFigures(
+  ids: string[],
+  question: string,
+  perPaper = 2,
+): Promise<Record<string, PaperFigure[]>> {
+  const params = new URLSearchParams({
+    ids: ids.join(","),
+    q: question.slice(0, 300),
+    per_paper: String(perPaper),
+  });
+  const res = await fetch(`${API_BASE}/figures?${params}`, { headers: headers() });
+  if (!res.ok) throw new Error(`/figures failed: ${res.status}`);
+  return ((await res.json()) as { figures: Record<string, PaperFigure[]> }).figures;
+}
+
 export async function health(): Promise<Health> {
   const res = await fetch(`${API_BASE}/health`, { headers: headers() });
   if (!res.ok) throw new Error(`health failed: ${res.status}`);

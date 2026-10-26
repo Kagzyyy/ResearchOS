@@ -20,7 +20,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -33,6 +33,7 @@ from src.api.ml_pipeline import MLPipeline
 from src.api.security import allowed_origins, api_token, guard, rate_limit_per_minute
 from src.api.uploads import UploadError, UploadStore
 from src.config import load_config
+from src.data import figures as figure_source
 from src.data.arxiv_source import breaker_open as arxiv_breaker_open
 from src.data.openalex_source import status as openalex_status
 
@@ -159,6 +160,7 @@ def health() -> dict[str, Any]:
                    "early_exits": getattr(pipeline, "early_exits", 0)},
         "live_sources": {
             "arxiv": {"available": not arxiv_breaker_open()},
+            "figures": {"available": not figure_source.breaker_open()},
             "openalex": openalex_status(),
         },
     }
@@ -322,6 +324,20 @@ def failures(limit: int = 30) -> dict[str, Any]:
 @app.get("/stats")
 def stats() -> dict[str, int]:
     return state["log"].stats()
+
+
+@app.get("/figures")
+def figures(ids: str = Query(max_length=120), q: str = Query(default="", max_length=300),
+            per_paper: int = Query(default=2, ge=1, le=4)) -> dict[str, Any]:
+    """Figures and captions for up to four arXiv papers, ranked against a question.
+
+    One batched request per answer rather than one per paper, so showing figures
+    costs a single hit on the per-minute limit. Always 200: a paper with no HTML
+    rendering, an arXiv hiccup and a malformed id all just come back empty,
+    because figures are decoration and must never fail an answer.
+    """
+    id_list = [i.strip() for i in ids.split(",") if i.strip()][:4]
+    return {"figures": figure_source.figures_for(id_list, q, per_paper)}
 
 
 @app.get("/v2/metrics")
